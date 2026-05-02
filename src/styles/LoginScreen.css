@@ -1,0 +1,71 @@
+/* src/styles/LoginScreen.css */
+
+.login-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 20px;
+  background-color: var(--bg-base);
+}
+
+.login-card {
+  width: 100%;
+  max-width: 420px;
+  padding: 40px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-lg);
+}
+
+.login-header {
+  text-align: center;
+  margin-bottom: 32px;
+}
+
+.login-header h1 {
+  font-family: var(--font-display);
+  font-size: 2.75rem;
+  margin-bottom: 8px;
+  color: var(--primary);
+}
+
+.login-header p {
+  color: var(--tx-2);
+  font-size: 1.1rem;
+  font-weight: 500;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.login-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.login-error {
+  color: var(--error);
+  text-align: center;
+  font-size: 0.9rem;
+  margin-top: 10px;
+  padding: 10px;
+  background: var(--red-dim);
+  border-radius: var(--r-sm);
+}
+
+@media (max-width: 480px) {
+  .login-card {
+    padding: 32px 24px;
+  }
+  
+  .login-header h1 {
+    font-size: 2.25rem;
+  }
+}

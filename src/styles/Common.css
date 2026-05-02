@@ -1,0 +1,191 @@
+/* Typography */
+h1, h2, h3, h4 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  color: var(--tx-1);
+}
+
+h1.brand {
+  font-size: 2.5rem;
+  color: var(--primary);
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+/* Warm Elevation Panels */
+.glass-panel {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-md);
+  transition: all var(--dur-base) var(--ease-out);
+}
+
+.glass-panel:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg);
+  border-color: var(--border-strong);
+}
+
+/* Premium Inputs */
+.premium-input {
+  width: 100%;
+  background: var(--bg-base);
+  border: 2px solid var(--border-subtle);
+  color: var(--tx-1);
+  padding: 14px 20px;
+  border-radius: var(--r-md);
+  font-family: var(--font-body);
+  font-size: 1rem;
+  transition: all var(--dur-fast) var(--ease-out);
+  outline: none;
+}
+
+.premium-input:focus {
+  border-color: var(--primary);
+  background: var(--bg-surface);
+  box-shadow: 0 0 0 4px var(--primary-glow);
+}
+
+.premium-input::placeholder {
+  color: var(--tx-3);
+  opacity: 0.7;
+}
+
+/* Micro-animated Buttons */
+.btn-primary {
+  background: var(--primary);
+  color: var(--tx-inv);
+  border: none;
+  padding: 14px 28px;
+  border-radius: var(--r-md);
+  font-size: 1rem;
+  font-weight: 700;
+  font-family: var(--font-body);
+  cursor: pointer;
+  transition: all var(--dur-base) var(--ease-spring);
+  box-shadow: var(--shadow-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.btn-primary:hover {
+  transform: translateY(-1px);
+  background: var(--gold-bright);
+  box-shadow: var(--shadow-md);
+}
+
+.btn-primary:active {
+  transform: translateY(1px) scale(0.98);
+}
+
+.btn-secondary {
+  background: var(--bg-overlay);
+  color: var(--tx-2);
+  border: 1px solid var(--border-subtle);
+  padding: 12px 24px;
+  border-radius: var(--r-md);
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--dur-base) var(--ease-out);
+}
+
+.btn-secondary:hover {
+  background: var(--bg-surface);
+  border-color: var(--border-strong);
+  color: var(--primary);
+}
+
+/* Checkbox Styles */
+.checkbox-container {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--tx-2);
+}
+
+.checkbox-input {
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg-surface);
+  cursor: pointer;
+  appearance: none;
+  transition: all var(--dur-fast) var(--ease-out);
+  position: relative;
+}
+
+.checkbox-input:checked {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.checkbox-input:checked::after {
+  content: '✓';
+  position: absolute;
+  color: var(--tx-inv);
+  font-size: 14px;
+  font-weight: 900;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+/* Modal Overlay */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(69, 26, 3, 0.4);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn var(--dur-base) var(--ease-out);
+}
+
+.modal-content {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-xl);
+  padding: 32px;
+  max-width: 500px;
+  width: 90vw;
+  box-shadow: var(--shadow-lg);
+  animation: slideUp var(--dur-slow) var(--ease-spring);
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { transform: translateY(20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+/* Forms & Layout Utilities */
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--tx-2);
+  margin-left: 4px;
+}

@@ -1,0 +1,139 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap');
+
+/* ============================================================
+   src/styles/variables.css
+   OrderHub Design System — Light Premium
+   ============================================================ */
+
+/* ── Tokens ─────────────────────────────────────────────── */
+:root {
+  /* Backgrounds */
+  --bg-base:        #FFF9F0; /* Clotted Cream */
+  --bg-base-90:     rgba(255, 249, 240, 0.9);
+  --bg-surface:     #FFFFFF;
+  --bg-elevated:    #FFFFFF;
+  --bg-overlay:     #FEF3C7;
+
+  /* Brand */
+  --gold:           #D97706; /* Burnt Amber */
+  --gold-bright:    #F59E0B; /* Bright Honey */
+  --gold-dim:       #FEF3C7; /* Pale Wheat */
+  --gold-glow:      rgba(217, 119, 6, 0.08);
+  --gold-border:    #FCD34D;
+
+  /* Status */
+  --green:          #16A34A;
+  --green-dim:      #DCFCE7;
+  --green-border:   #BBF7D0;
+  --red:            #991B1B;
+  --red-dim:        #FEE2E2;
+  --red-border:     #FECACA;
+  --amber:          #EA580C;
+  --amber-dim:      #FFEDD5;
+  --blue:           #0369A1; /* Muted Ocean */
+  --blue-dim:       #E0F2FE;
+
+  /* Text */
+  --tx-1:           #451A03; /* Dark Chocolate */
+  --tx-2:           #92400E; /* Aged Copper */
+  --tx-3:           #9CA3AF; /* Muted Slate */
+  --tx-inv:         #FFFFFF;
+
+  /* Borders */
+  --border-subtle:  #FEF3C7;
+  --border-default: #FDE68A;
+  --border-strong:  #FCD34D;
+
+  /* Shadows (Light Theme) */
+  --shadow-sm:      0 1px 2px rgba(69, 26, 3, 0.05);
+  --shadow-md:      0 8px 24px rgba(69, 26, 3, 0.08);
+  --shadow-lg:      0 16px 48px rgba(69, 26, 3, 0.12);
+  --shadow-gold:    0 8px 32px rgba(217, 119, 6, 0.15);
+
+  /* Typography */
+  --font-display:   'DM Serif Display', Georgia, serif;
+  --font-body:      'Plus Jakarta Sans', system-ui, sans-serif;
+  --font-mono:      'SF Mono', 'Fira Code', monospace;
+
+  /* Spacing scale */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+  --sp-16: 64px;
+
+  /* Radii */
+  --r-sm:   8px;
+  --r-md:   12px;
+  --r-lg:   20px;
+  --r-xl:   28px;
+  --r-full: 999px;
+
+  /* Motion */
+  --ease-out:   cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in:    cubic-bezier(0.4, 0, 1, 1);
+  --ease-spring:cubic-bezier(0.34, 1.56, 0.64, 1);
+  --dur-fast:   120ms;
+  --dur-base:   200ms;
+  --dur-slow:   350ms;
+
+  /* Layout */
+  --sidebar-w:    260px;
+  --topbar-h:     56px;
+  --content-max:  1360px;
+}
+
+/* ── Reset ───────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: var(--font-body);
+  background: var(--bg-base);
+  color: var(--tx-1);
+  line-height: 1.5;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Noise texture overlay for depth */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 9999;
+  opacity: 0.4;
+}
+
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--r-full);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--tx-3); }
+
+::selection {
+  background: var(--gold-glow);
+  color: var(--gold-bright);
+}
