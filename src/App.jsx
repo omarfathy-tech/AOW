@@ -14,12 +14,19 @@ export default function OrderHubApp() {
   const { user, loading, login, logout, isAdmin } = useAuth();
   const connectionOk = useAppHealth(user);
   
-  const [view, setView] = useState("hub"); // hub, portal, history
+  const [view, setView] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('adminHistory') === 'true') return "history";
+    return "hub";
+  });
   const [selectedRestaurant, setSelectedRestaurant] = useState(null);
 
   const handleLogout = async () => {
     await logout();
     setSelectedRestaurant(null);
+    const url = new URL(window.location.href);
+    url.searchParams.delete('adminHistory');
+    window.history.replaceState({}, '', url.toString());
     setView("hub");
   };
 
@@ -131,7 +138,7 @@ export default function OrderHubApp() {
           {isAdmin ? (
             <AdminPortal user={user} />
           ) : view === "history" ? (
-            <OrderHistoryPage user={user} />
+            <OrderHistoryPage user={user} isAdmin={isAdmin} />
           ) : view === "portal" && selectedRestaurant ? (
             <UserPortal 
               user={user} 

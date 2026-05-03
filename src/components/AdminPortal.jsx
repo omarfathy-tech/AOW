@@ -391,6 +391,14 @@ export default function AdminPortal({ user }) {
           padding: 'var(--sp-3) 0',
         }}
       >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 var(--sp-4)', marginBottom: '8px' }}>
+           <h3 style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: 'var(--tx-3)', fontWeight: '800', letterSpacing: '0.08em', margin: 0 }}>
+             Actives
+           </h3>
+           <Button variant="ghost" size="sm" onClick={() => window.open(window.location.origin + window.location.pathname + '?adminHistory=true', '_blank')} style={{ fontSize: '0.75rem', padding: '4px 10px' }}>
+             📜 View All History
+           </Button>
+        </div>
         <div
           style={{
             overflowX: 'auto',

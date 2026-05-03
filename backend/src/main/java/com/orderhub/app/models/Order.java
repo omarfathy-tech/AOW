@@ -47,8 +47,7 @@ public class Order {
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 
-    @OneToMany(cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
-    @JoinColumn(name = "order_id")
+    @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     private List<OrderLineItem> items;
 
     @PrePersist

@@ -5,6 +5,8 @@ import com.orderhub.app.models.PersonOrder;
 import com.orderhub.app.models.Restaurant;
 import com.orderhub.app.repositories.OrderSessionRepository;
 import com.orderhub.app.repositories.RestaurantRepository;
+import com.orderhub.app.repositories.UserRepository;
+import com.orderhub.app.models.User;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -31,6 +33,12 @@ public class AdminController {
 
     @Autowired
     private RestaurantRepository restaurantRepository;
+    
+    @Autowired
+    private UserRepository userRepository;
+    
+    @Autowired
+    private com.orderhub.app.repositories.OrderRepository orderRepository;
 
     @Autowired
     private MongoTemplate mongoTemplate;
@@ -100,6 +108,38 @@ public class AdminController {
         // Mark all person orders as CONFIRMED
         for (PersonOrder po : session.getPersonOrders()) {
             po.setStatus("CONFIRMED");
+            
+            // Sync to MySQL for long-term history/auditing
+            try {
+                User user = userRepository.findByUsername(po.getName()).orElse(null);
+                if (user != null) {
+                    com.orderhub.app.models.Order mysqlOrder = new com.orderhub.app.models.Order();
+                    mysqlOrder.setUser(user);
+                    mysqlOrder.setRestaurantId(session.getRestaurantId());
+                    mysqlOrder.setSessionId(session.getId());
+                    mysqlOrder.setStatus(com.orderhub.app.models.OrderStatus.DELIVERED);
+                    mysqlOrder.setTotalPrice(po.getSubtotal() + (session.getDeliveryFee() / session.getPersonOrders().size()));
+                    mysqlOrder.setNotes(po.getNotes());
+                    
+                    List<com.orderhub.app.models.OrderLineItem> sqlItems = new java.util.ArrayList<>();
+                    for (Map<String, Object> itemMap : po.getItems()) {
+                        com.orderhub.app.models.OrderLineItem sqlItem = new com.orderhub.app.models.OrderLineItem();
+                        sqlItem.setItemName((String) itemMap.get("name"));
+                        sqlItem.setSize((String) itemMap.get("size"));
+                        sqlItem.setUnitPrice(((Number) itemMap.get("price")).doubleValue());
+                        // Option might be stored in extras or separate field
+                        sqlItem.setExtras((String) itemMap.get("option"));
+                        sqlItem.setQuantity(1);
+                        sqlItem.setOrder(mysqlOrder);
+                        sqlItems.add(sqlItem);
+                    }
+                    mysqlOrder.setItems(sqlItems);
+                    orderRepository.save(mysqlOrder);
+                }
+            } catch (Exception e) {
+                // Log and continue - don't block the main session logic if history sync fails
+                e.printStackTrace();
+            }
         }
         
         return ResponseEntity.ok(mongoTemplate.save(session));

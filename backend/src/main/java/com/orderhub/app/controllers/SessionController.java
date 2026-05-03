@@ -31,13 +31,14 @@ public class SessionController {
 
     @GetMapping("/active")
     public List<OrderSession> getActiveSessions() {
-        return sessionRepository.findByStatus("OPEN");
+        // Active means the admin is still working on it (OPEN or CLOSED)
+        return sessionRepository.findByStatusIn(List.of("OPEN", "CLOSED"));
     }
 
     @GetMapping("/active/status")
     public ResponseEntity<Map<String, Object>> getActiveSessionStatus() {
-        List<OrderSession> active = sessionRepository.findByStatus("OPEN");
-        log.info("Active status poll. Found {} open sessions.", active.size());
+        List<OrderSession> active = sessionRepository.findByStatusIn(List.of("OPEN", "CLOSED"));
+        log.info("Active status poll. Found {} active sessions.", active.size());
 
         if (!active.isEmpty()) {
             OrderSession session = active.get(0);

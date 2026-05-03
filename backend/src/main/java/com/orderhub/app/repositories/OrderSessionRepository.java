@@ -18,6 +18,8 @@ public interface OrderSessionRepository extends MongoRepository<OrderSession, St
 
     List<OrderSession> findByStatus(String status);
     
+    List<OrderSession> findByStatusIn(List<String> statuses);
+    
     Page<OrderSession> findByStatus(String status, Pageable pageable);
 
     // Useful for the admin history endpoint — newest first

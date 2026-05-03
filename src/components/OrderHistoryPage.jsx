@@ -4,7 +4,7 @@ import Button from './common/Button';
 import Input from './common/Input';
 import Card from './common/Card';
 
-export default function OrderHistoryPage({ user }) {
+export default function OrderHistoryPage({ user, isAdmin = false }) {
   const [history, setHistory] = useState([]);
   const [expanded, setExpanded] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -17,22 +17,25 @@ export default function OrderHistoryPage({ user }) {
   const loadHistory = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API}/orders/user/${user.id || user.username}`, { headers: getAuthHeaders(false) });
+      const endpoint = isAdmin ? `${API}/orders` : `${API}/orders/user/${user.id || user.username}`;
+      const res = await fetch(endpoint, { headers: getAuthHeaders(false) });
       const data = await res.json();
       setHistory(data.content || data);
     } catch (err) {
       console.error(err);
-      try {
-        const res = await fetch(`${API}/orders/mine?username=${encodeURIComponent(user.username)}`, { headers: getAuthHeaders(false) });
-        const data = await res.json();
-        setHistory(data.content || data);
-      } catch (_err) {
-        console.error(_err);
+      if (!isAdmin) {
+        try {
+          const res = await fetch(`${API}/orders/mine?username=${encodeURIComponent(user.username)}`, { headers: getAuthHeaders(false) });
+          const data = await res.json();
+          setHistory(data.content || data);
+        } catch (_err) {
+          console.error(_err);
+        }
       }
     } finally {
       setLoading(false);
     }
-  }, [user.username, user.id]);
+  }, [user.username, user.id, isAdmin]);
 
   useEffect(() => {
     loadHistory();
@@ -162,8 +165,12 @@ export default function OrderHistoryPage({ user }) {
   return (
     <div className="portal-content">
       <Card style={{ padding: '24px' }}>
-        <h2 style={{ fontSize: '1.5rem', marginBottom: '4px' }}>📜 Order History</h2>
-        <p style={{ color: 'var(--text-secondary)' }}>Your past orders across all sessions.</p>
+        <h2 style={{ fontSize: '1.5rem', marginBottom: '4px' }}>
+          {isAdmin ? "🏛️ Master Audit History" : "📜 My Order History"}
+        </h2>
+        <p style={{ color: 'var(--text-secondary)' }}>
+          {isAdmin ? "Global view of all processed orders across sessions." : "Your past orders across all sessions."}
+        </p>
       </Card>
 
       <Card style={{ padding: '20px' }}>
