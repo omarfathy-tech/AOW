@@ -12,6 +12,12 @@ export function useAuth() {
       
       if (storedUser && token) {
         try {
+          // First check if backend is reachable
+          const healthRes = await fetch(`${API}/health`);
+          if (!healthRes.ok) {
+            console.warn('Backend health check failed:', healthRes.status);
+          }
+          
           const res = await fetch(`${API}/users/me`, {
              headers: { 'Authorization': `Bearer ${token}` }
           });
@@ -25,6 +31,7 @@ export function useAuth() {
           }
         } catch (err) {
           console.error('Auth validation failed:', err);
+          console.error('API URL being used:', API);
         }
       }
       setLoading(false);

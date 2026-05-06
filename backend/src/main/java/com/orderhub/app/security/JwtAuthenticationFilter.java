@@ -41,6 +41,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     @Autowired
     private UserCache userCache;
 
+    private String normalizeAuthority(String authority) {
+        if (authority == null || authority.isBlank()) return "ROLE_USER";
+        return authority.startsWith("ROLE_") ? authority : "ROLE_" + authority;
+    }
+
     @Override
     protected void doFilterInternal(HttpServletRequest request,
                                     HttpServletResponse response,
@@ -85,7 +90,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     new UsernamePasswordAuthenticationToken(
                         user.getUsername(), // principal should be string for getName()
                         null,
-                        Collections.singletonList(new SimpleGrantedAuthority(user.getRole().name()))
+                        Collections.singletonList(new SimpleGrantedAuthority(
+                            normalizeAuthority(user.getRole() != null ? user.getRole().name() : null)
+                        ))
                     );
                 authToken.setDetails(
                     new WebAuthenticationDetailsSource().buildDetails(request)

@@ -19,6 +19,11 @@ public class CustomUserDetailsService implements UserDetailsService {
         this.userRepository = userRepository;
     }
 
+    private String normalizeAuthority(String authority) {
+        if (authority == null || authority.isBlank()) return "ROLE_USER";
+        return authority.startsWith("ROLE_") ? authority : "ROLE_" + authority;
+    }
+
     @Override
     public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
         User user = userRepository.findByUsername(username)
@@ -27,7 +32,9 @@ public class CustomUserDetailsService implements UserDetailsService {
         return new org.springframework.security.core.userdetails.User(
                 user.getUsername(),
                 user.getPassword(),
-                Collections.singletonList(new SimpleGrantedAuthority(user.getRole().name()))
+                Collections.singletonList(new SimpleGrantedAuthority(
+                    normalizeAuthority(user.getRole() != null ? user.getRole().name() : null)
+                ))
         );
     }
 }

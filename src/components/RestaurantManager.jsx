@@ -7,18 +7,41 @@ import { useToast } from '../context/ToastContext';
 
 const CUISINE_TYPES = ['PITZA', 'BURGER', 'CHICKEN', 'OTHER'];
 const ORDER_MODES = ['MENU', 'TEXT'];
+const MENU_TEMPLATES = [
+  { name: 'Primos', url: 'https://elmenus.com/cairo/primos-pizza-p5gz', cuisineType: 'PITZA' },
+  { name: 'Eldahan', url: 'https://elmenus.com/cairo/eldahan-2x73', cuisineType: 'OTHER' },
+  { name: 'Abo Mazen', url: 'https://elmenus.com/cairo/abou-anas-el-soury-7qov', cuisineType: 'OTHER' },
+];
 
 export default function RestaurantManager() {
   const [restaurants, setRestaurants] = useState([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState(null);
   const [editingId, setEditingId] = useState(null);
-  const [form, setForm] = useState({ name: '', cuisineType: 'OTHER', description: '', deliveryFee: 0, logoUrl: '', available: true, orderMode: 'MENU' });
+  const [form, setForm] = useState({ name: '', cuisineType: 'OTHER', description: '', deliveryFee: 0, logoUrl: '', available: true, orderMode: 'MENU', menuUrl: '' });
   const [categoryForm, setCategoryForm] = useState({ name: '' });
   const [itemForm, setItemForm] = useState({ name: '', prices: { Small: 0, Medium: 0, Large: 0 } });
   const [editingCategoryId, setEditingCategoryId] = useState(null);
   const [editingItemId, setEditingItemId] = useState(null);
+  const [importUrl, setImportUrl] = useState('');
+  const [importLoading, setImportLoading] = useState(false);
+  const [importPreview, setImportPreview] = useState(null);
   const showToast = useToast();
+
+  async function readErrorMessage(res, fallback) {
+    try {
+      const text = await res.text();
+      if (!text) return fallback;
+      try {
+        const parsed = JSON.parse(text);
+        return parsed.error || parsed.message || fallback;
+      } catch {
+        return text;
+      }
+    } catch {
+      return fallback;
+    }
+  }
 
   useEffect(() => {
     fetchRestaurants();
@@ -38,7 +61,7 @@ export default function RestaurantManager() {
   }
 
   function resetForm() {
-    setForm({ name: '', cuisineType: 'OTHER', description: '', deliveryFee: 0, logoUrl: '', available: true, orderMode: 'MENU' });
+    setForm({ name: '', cuisineType: 'OTHER', description: '', deliveryFee: 0, logoUrl: '', available: true, orderMode: 'MENU', menuUrl: '' });
     setEditingId(null);
   }
 
@@ -59,13 +82,88 @@ export default function RestaurantManager() {
         headers: getAuthHeaders(),
         body: JSON.stringify(payload)
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        const reason = await readErrorMessage(res, `HTTP ${res.status}`);
+        throw new Error(reason);
+      }
+      const savedRestaurant = await res.json();
+      const importedCategories = savedRestaurant?.categories?.length || 0;
       showToast(editingId ? 'Restaurant updated' : 'Restaurant created', 'success');
+      if (!editingId && payload.menuUrl?.trim()) {
+        if (importedCategories > 0) {
+          showToast(`Menu imported automatically (${importedCategories} categories)`, 'success');
+        } else {
+          showToast('Restaurant created. Auto-import pending/fallback; you can retry from Import panel.', 'info');
+        }
+      }
       resetForm();
       fetchRestaurants();
     } catch (err) {
       console.error(err);
-      showToast('Failed to save restaurant', 'error');
+      showToast(`Failed to save restaurant: ${err.message || 'Unknown error'}`, 'error');
+    }
+  }
+
+  async function handleCreateWithImport() {
+    if (editingId) {
+      showToast('Use normal update while editing an existing restaurant', 'info');
+      return;
+    }
+    if (!form.menuUrl?.trim()) {
+      showToast('Menu link is required for import', 'error');
+      return;
+    }
+    if (!form.name.trim()) {
+      showToast('Restaurant name is required', 'error');
+      return;
+    }
+
+    setImportLoading(true);
+    try {
+      // 1) Import from provider URL (creates restaurant with scraped menu)
+      const importRes = await fetch(`${API}/menu-import/import`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ url: form.menuUrl.trim() })
+      });
+      if (!importRes.ok) {
+        const reason = await readErrorMessage(importRes, `HTTP ${importRes.status}`);
+        throw new Error(reason);
+      }
+      const imported = await importRes.json();
+
+      // 2) Apply admin form overrides (name, fees, availability, etc.)
+      const payload = {
+        ...imported,
+        name: form.name.trim(),
+        cuisineType: form.cuisineType || imported.cuisineType,
+        description: form.description ?? imported.description,
+        deliveryFee: parseFloat(form.deliveryFee) || 0,
+        logoUrl: form.logoUrl || imported.logoUrl || '',
+        available: form.available,
+        orderMode: form.orderMode || imported.orderMode || 'MENU',
+        menuUrl: form.menuUrl.trim(),
+      };
+      const updateRes = await fetch(`${API}/restaurants/${imported.id}`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(payload)
+      });
+      if (!updateRes.ok) {
+        const reason = await readErrorMessage(updateRes, `HTTP ${updateRes.status}`);
+        throw new Error(reason);
+      }
+
+      showToast(`Restaurant created and menu imported for "${payload.name}"`, 'success');
+      resetForm();
+      setImportPreview(null);
+      setImportUrl('');
+      fetchRestaurants();
+    } catch (err) {
+      console.error(err);
+      showToast(`Create+Import failed: ${err.message || 'Unknown error'}`, 'error');
+    } finally {
+      setImportLoading(false);
     }
   }
 
@@ -82,6 +180,88 @@ export default function RestaurantManager() {
     }
   }
 
+  function applyTemplate(template) {
+    setForm(f => ({
+      ...f,
+      name: template.name,
+      menuUrl: template.url,
+      cuisineType: template.cuisineType || f.cuisineType
+    }));
+    setImportUrl(template.url);
+    setImportPreview(null);
+    showToast(`Template loaded: ${template.name}`, 'info');
+  }
+
+  async function handlePreviewImport() {
+    if (!importUrl.trim()) { showToast('Paste a menu URL first', 'error'); return; }
+    setImportLoading(true);
+    try {
+      const res = await fetch(`${API}/menu-import/preview`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ url: importUrl.trim() })
+      });
+      if (!res.ok) {
+        const reason = await readErrorMessage(res, `HTTP ${res.status}`);
+        throw new Error(reason);
+      }
+      const data = await res.json();
+      setImportPreview(data);
+      showToast(`Preview ready: ${data.categories?.length || 0} categories`, 'success');
+    } catch (err) {
+      console.error(err);
+      showToast(`Preview failed: ${err.message || 'Unknown error'}`, 'error');
+      setImportPreview(null);
+    } finally {
+      setImportLoading(false);
+    }
+  }
+
+  async function handleImport() {
+    if (!importUrl.trim()) { showToast('Paste a menu URL first', 'error'); return; }
+    setImportLoading(true);
+    try {
+      const res = await fetch(`${API}/menu-import/import`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ url: importUrl.trim() })
+      });
+      if (!res.ok) {
+        const reason = await readErrorMessage(res, `HTTP ${res.status}`);
+        throw new Error(reason);
+      }
+      const data = await res.json();
+      setImportUrl('');
+      setImportPreview(null);
+      showToast(`Imported "${data.name}" successfully!`, 'success');
+      fetchRestaurants();
+    } catch (err) {
+      console.error(err);
+      showToast(`Import failed: ${err.message || 'Unknown error'}`, 'error');
+    } finally {
+      setImportLoading(false);
+    }
+  }
+
+  async function handleRefreshMenu(restaurantId) {
+    setImportLoading(true);
+    try {
+      const res = await fetch(`${API}/menu-import/refresh/${restaurantId}`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      showToast(`Refreshed "${data.name}" — ${data.categories?.length || 0} categories`, 'success');
+      fetchRestaurants();
+    } catch (err) {
+      console.error(err);
+      showToast('Refresh failed', 'error');
+    } finally {
+      setImportLoading(false);
+    }
+  }
+
   function startEdit(restaurant) {
     setEditingId(restaurant.id);
     setForm({
@@ -92,6 +272,7 @@ export default function RestaurantManager() {
       logoUrl: restaurant.logoUrl || '',
       available: restaurant.available !== false,
       orderMode: restaurant.orderMode || 'MENU',
+      menuUrl: restaurant.menuUrl || '',
     });
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
@@ -254,8 +435,38 @@ export default function RestaurantManager() {
             </select>
           </div>
         </div>
-        <div style={{ marginTop: 'var(--sp-3)' }}>
+        <div style={{ marginTop: 'var(--sp-3)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
           <Input label="Description" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Short description..." />
+          <Input
+            label="Menu Link (optional)"
+            value={form.menuUrl}
+            onChange={e => setForm(f => ({ ...f, menuUrl: e.target.value }))}
+            placeholder="https://menuegypt.com/..."
+          />
+          {!editingId && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+              {MENU_TEMPLATES.map(t => (
+                <button
+                  key={t.name}
+                  type="button"
+                  onClick={() => applyTemplate(t)}
+                  style={{
+                    border: '1px solid var(--border-default)',
+                    background: 'var(--bg-elevated)',
+                    color: 'var(--tx-2)',
+                    borderRadius: 'var(--r-full)',
+                    padding: '6px 12px',
+                    fontSize: '0.75rem',
+                    fontWeight: '700',
+                    cursor: 'pointer',
+                    fontFamily: 'var(--font-body)'
+                  }}
+                >
+                  {t.name}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)', marginTop: 'var(--sp-4)' }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.9rem', fontWeight: '600', color: 'var(--tx-2)' }}>
@@ -267,7 +478,7 @@ export default function RestaurantManager() {
             />
             Available
           </label>
-          <div style={{ marginLeft: 'auto', display: 'flex', gap: 'var(--sp-3)' }}>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 'var(--sp-3)', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
             {editingId && (
               <Button variant="ghost" onClick={resetForm} style={{ borderColor: 'var(--tx-3)', color: 'var(--tx-3)' }}>
                 Cancel
@@ -276,8 +487,69 @@ export default function RestaurantManager() {
             <Button onClick={handleSaveRestaurant}>
               {editingId ? 'Update Restaurant' : 'Create Restaurant'}
             </Button>
+            {!editingId && (
+              <Button
+                variant="secondary"
+                onClick={handleCreateWithImport}
+                disabled={importLoading || !form.menuUrl?.trim()}
+                title="Create restaurant and import menu from Menu Link field"
+              >
+                {importLoading ? 'Importing…' : 'Create + Import Menu'}
+              </Button>
+            )}
           </div>
         </div>
+      </Card>
+
+      {/* ── Import from URL ── */}
+      <Card variant="raised" style={{ padding: 'var(--sp-5)' }}>
+        <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.1rem', marginBottom: 'var(--sp-3)', color: 'var(--tx-1)' }}>
+          📥 Import from External URL
+        </h3>
+        <p style={{ fontSize: '0.8rem', color: 'var(--tx-3)', marginBottom: 'var(--sp-3)' }}>
+          Paste an elmenus.com link to auto-fill name, logo, cuisine and full menu.
+        </p>
+        <div style={{ display: 'flex', gap: 'var(--sp-3)', flexWrap: 'wrap' }}>
+          <input
+            type="url"
+            placeholder="https://www.elmenus.com/ar/..."
+            value={importUrl}
+            onChange={e => { setImportUrl(e.target.value); setImportPreview(null); }}
+            style={{
+              flex: 1, minWidth: '240px', padding: '10px 12px',
+              borderRadius: 'var(--r-sm)', border: '1px solid var(--border-default)',
+              background: 'var(--bg-elevated)', color: 'var(--tx-1)', fontFamily: 'var(--font-body)'
+            }}
+          />
+          <Button size="sm" variant="secondary" onClick={handlePreviewImport} disabled={importLoading || !importUrl.trim()}>
+            {importLoading ? '…' : 'Preview'}
+          </Button>
+          <Button size="sm" onClick={handleImport} disabled={importLoading || !importUrl.trim()}>
+            {importLoading ? 'Importing…' : 'Import'}
+          </Button>
+        </div>
+
+        {importPreview && (
+          <div style={{
+            marginTop: 'var(--sp-4)', padding: 'var(--sp-4)',
+            background: 'var(--bg-base)', borderRadius: 'var(--r-md)',
+            border: '1px dashed var(--border-default)'
+          }}>
+            <div style={{ fontWeight: '800', color: 'var(--tx-1)', marginBottom: '6px' }}>
+              {importPreview.restaurantName}
+            </div>
+            <div style={{ fontSize: '0.8rem', color: 'var(--tx-3)' }}>
+              {importPreview.cuisineType} • {importPreview.categories?.length || 0} categories •{' '}
+              {importPreview.categories?.reduce((sum, c) => sum + (c.items?.length || 0), 0) || 0} items
+            </div>
+            {importPreview.categories?.map((cat, i) => (
+              <div key={i} style={{ marginTop: '8px', fontSize: '0.75rem', color: 'var(--tx-2)' }}>
+                <span style={{ fontWeight: '700' }}>{cat.name}</span>{' '}
+                ({cat.items?.length || 0} items)
+              </div>
+            ))}
+          </div>
+        )}
       </Card>
 
       {/* ── List ── */}
@@ -304,11 +576,26 @@ export default function RestaurantManager() {
                   <div>
                     <div style={{ fontWeight: '800', fontSize: '1rem', color: 'var(--tx-1)' }}>{restaurant.name}</div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--tx-3)', marginTop: '2px' }}>
-                      {restaurant.cuisineType} • {restaurant.deliveryFee}ج delivery • {restaurant.orderMode === 'TEXT' ? '💬 Chat' : '📋 Menu'} • {restaurant.available !== false ? 'Available' : 'Unavailable'}
+                      {restaurant.cuisineType} • {restaurant.deliveryFee}ج delivery •{' '}
+                      {restaurant.orderMode === 'TEXT' ? '💬 Chat' : '📋 Menu'} •{' '}
+                      {restaurant.available !== false ? 'Available' : 'Unavailable'}
+                      {restaurant.menuUrl && (
+                        <> •{' '}
+                          <a href={restaurant.menuUrl} target="_blank" rel="noreferrer"
+                            style={{ color: 'var(--gold)', fontWeight: '700', textDecoration: 'none' }}
+                            onClick={e => e.stopPropagation()}
+                          >🔗 Menu</a>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: '8px' }}>
+                  {restaurant.menuUrl && (
+                    <Button variant="ghost" size="sm" onClick={() => handleRefreshMenu(restaurant.id)} disabled={importLoading} style={{ fontSize: '0.8rem', color: 'var(--gold)' }}>
+                      🔄 Refresh
+                    </Button>
+                  )}
                   <Button variant="ghost" size="sm" onClick={() => handleToggleAvailability(restaurant)} style={{ fontSize: '0.8rem' }}>
                     {restaurant.available !== false ? '🔴 Disable' : '🟢 Enable'}
                   </Button>

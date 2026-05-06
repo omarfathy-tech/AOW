@@ -2,8 +2,10 @@
 /work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/config/WebSocketConfig.java
 /work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/controllers/AdminController.java
 /work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/controllers/AuthController.java
+/work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/controllers/HealthController.java
 /work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/controllers/MenuAdminController.java
 /work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/controllers/MenuController.java
+/work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/controllers/MenuImportController.java
 /work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/controllers/OrderController.java
 /work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/controllers/OrderHistoryController.java
 /work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/controllers/RestaurantController.java
@@ -11,6 +13,7 @@
 /work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/controllers/UserController.java
 /work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/controllers/UserPreferencesController.java
 /work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/controllers/WebSocketController.java
+/work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/dto/ScrapedMenuDTO.java
 /work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/models/JsonConverter.java
 /work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/models/MenuCategory.java
 /work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/models/MenuItem.java
@@ -35,4 +38,7 @@
 /work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/security/JwtUtil.java
 /work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/security/SecurityConfig.java
 /work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/security/UserCache.java
+/work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/services/ElmenusApiClient.java
+/work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/services/MenuImportService.java
+/work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/services/MenuScraperService.java
 /work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/services/OrderWebSocketService.java

@@ -29,6 +29,10 @@ public class PersonOrder {
     private String notes;
     private String textOrder; // For TEXT mode restaurants (free-form order text)
     
+    // Discount fields (per-user)
+    private Double discountPercent = 0.0;
+    private Double flatDiscountPerUser = 0.0;
+
     // Payment tracking fields
     private boolean isPaid = false;
     private String paymentMethod; // VODAFONE, INSTAPAY, CASH, null

@@ -5,7 +5,8 @@ import Button from './common/Button';
 import Input from './common/Input';
 import Card from './common/Card';
 import StatusBadge from './common/StatusBadge';
-import { useSessions } from '../hooks/useSessions';
+import { sendOrderToUser } from '../utils/whatsappHelper';
+import { useSessions } from '../hooks/useSessions.js';
 import { useToast } from '../context/ToastContext';
 import RestaurantManager from './RestaurantManager';
 
@@ -227,22 +228,6 @@ export default function AdminPortal({ user }) {
     } catch (err) { console.error(err); }
   };
 
-  const handleUpdateDiscounts = async (updates) => {
-    if (!dashboardSession) return;
-    try {
-      const res = await fetch(`${API}/admin/sessions/${dashboardSession.id}/discounts`, {
-        method: 'PATCH',
-        headers: getAuthHeaders(),
-        body: JSON.stringify(updates)
-      });
-      if (res.ok) {
-        const updated = await res.json();
-        setDashboardSession(updated);
-        showToast('Discounts updated', 'success');
-      }
-    } catch (err) { console.error(err); }
-  };
-
   const handleSendToWhatsApp = async () => {
     if (!dashboardSession) return;
 
@@ -297,6 +282,8 @@ export default function AdminPortal({ user }) {
     const dlvPP = count > 0 ? dashboardSession.deliveryFee / count : 0;
 
     dashboardSession.personOrders.forEach(p => {
+      const pDiscPct = p.discountPercent || 0;
+      const pFlatDisc = p.flatDiscountPerUser || 0;
       lines.push(`👤 *${p.name}*`);
       if (p.notes) lines.push(`  ✍️ ${p.notes}`);
       if (p.textOrder) {
@@ -314,20 +301,23 @@ export default function AdminPortal({ user }) {
           );
         });
       }
-      lines.push(
-        `  🧾 *Subtotal:* ${p.subtotal}ج + ${dlvPP.toFixed(1)}ج delivery = *${(
-          p.subtotal + dlvPP
-        ).toFixed(1)}ج*\n`
-      );
+      const pBase = p.subtotal + dlvPP;
+      let pAfterPct = pBase;
+      if (pDiscPct > 0) pAfterPct = pBase * (1 - pDiscPct / 100);
+      let pAfterFlat = pAfterPct - pFlatDisc;
+      const pTotal = Math.max(0, Math.ceil(pAfterFlat));
+      let costLine = `  🧾 *Subtotal:* ${p.subtotal}ج + ${dlvPP.toFixed(1)}ج delivery`;
+      if (pDiscPct > 0) costLine += ` - ${pDiscPct}%`;
+      if (pFlatDisc > 0) costLine += ` - ${pFlatDisc.toFixed(0)}ج`;
+      costLine += ` = *${pTotal}ج*\n`;
+      lines.push(costLine);
     });
 
     lines.push('\n💸 *Financials*');
-    const discPct = dashboardSession.discountPercent || 0;
-    const flatDisc = dashboardSession.flatDiscountPerUser || 0;
     lines.push(`• Subtotal: ${(dashboardSession.total - dashboardSession.deliveryFee).toFixed(1)}ج`);
     lines.push(`• Delivery: ${dashboardSession.deliveryFee}ج (${dlvPP.toFixed(1)}ج/person)`);
-    if (discPct > 0) lines.push(`• Discount: ${discPct}% off per person`);
-    if (flatDisc > 0) lines.push(`• Compensation: ${flatDisc.toFixed(0)}ج off per person`);
+    const anyDiscounts = dashboardSession.personOrders.some(p => (p.discountPercent || 0) > 0 || (p.flatDiscountPerUser || 0) > 0);
+    if (anyDiscounts) lines.push(`• Per-user discounts applied`);
     const totalWithCeil = costSplit.reduce((sum, r) => sum + r.grandTotal, 0);
     lines.push(`💵 *Grand Total: ${totalWithCeil}ج*`);
 
@@ -345,6 +335,30 @@ export default function AdminPortal({ user }) {
       const updated = await res.json();
       setDashboardSession(updated);
       refreshSessions();
+
+      // Send individual order messages to users
+      try {
+        const usersRes = await fetch(`${API}/users`, { headers: getAuthHeaders(false) });
+        if (usersRes.ok) {
+          const users = await usersRes.json();
+          const userMap = {};
+          users.forEach(u => userMap[u.username] = u);
+
+          dashboardSession.personOrders.forEach(p => {
+            const user = userMap[p.name];
+            if (user && user.phone) {
+              const discPct = p.discountPercent || 0;
+              const flatDisc = p.flatDiscountPerUser || 0;
+              const message = sendOrderToUser(p, dashboardSession.sessionName, dashboardSession.deliveryFee, dashboardSession.personOrders.length, discPct, flatDisc);
+              const phone = user.phone.replace(/\+/g, '');
+              const url = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
+              window.open(url, '_blank');
+            }
+          });
+        }
+      } catch (userErr) {
+        console.error('Failed to send user messages:', userErr);
+      }
     } catch (err) {
       console.error(err);
     }
@@ -386,9 +400,9 @@ export default function AdminPortal({ user }) {
   const costSplit = useMemo(() => {
     if (!dashboardSession || !dashboardSession.personOrders || dashboardSession.personOrders.length === 0) return [];
     const dlvPP = dashboardSession.deliveryFee / dashboardSession.personOrders.length;
-    const discPct = dashboardSession.discountPercent || 0;
-    const flatDisc = dashboardSession.flatDiscountPerUser || 0;
     return dashboardSession.personOrders.map(p => {
+      const discPct = p.discountPercent || 0;
+      const flatDisc = p.flatDiscountPerUser || 0;
       const base = p.subtotal + dlvPP;
       let afterPct = base;
       if (discPct > 0) afterPct = base * (1 - discPct / 100);
@@ -743,9 +757,36 @@ export default function AdminPortal({ user }) {
                       </div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                         {p.textOrder ? (
-                          <div style={{ fontSize: '0.9rem', color: 'var(--tx-1)', whiteSpace: 'pre-wrap', lineHeight: 1.4, background: 'var(--bg-base)', padding: '8px', borderRadius: 'var(--r-sm)' }}>
-                            {p.textOrder}
-                          </div>
+                          <>
+                            <div style={{ fontSize: '0.9rem', color: 'var(--tx-1)', whiteSpace: 'pre-wrap', lineHeight: 1.4, background: 'var(--bg-base)', padding: '8px', borderRadius: 'var(--r-sm)' }}>
+                              {p.textOrder}
+                            </div>
+                            {!isSent && (
+                              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '8px' }}>
+                                <span style={{ fontSize: '0.75rem', color: 'var(--tx-3)', fontWeight: '700' }}>Price:</span>
+                                <input
+                                  type="number"
+                                  defaultValue={p.subtotal || 0}
+                                  onBlur={(e) => {
+                                    const val = parseFloat(e.target.value) || 0;
+                                    if (val !== p.subtotal) {
+                                      handleUpdatePayment(p.name, { subtotal: val });
+                                    }
+                                  }}
+                                  style={{
+                                    width: '80px',
+                                    padding: '4px 8px',
+                                    borderRadius: 'var(--r-sm)',
+                                    border: '1px solid var(--border-default)',
+                                    background: 'var(--bg-elevated)',
+                                    color: 'var(--tx-1)',
+                                    fontSize: '0.85rem'
+                                  }}
+                                />
+                                <span style={{ fontSize: '0.75rem', color: 'var(--tx-3)' }}>ج</span>
+                              </div>
+                            )}
+                          </>
                         ) : (
                           p.items.map((i, iIdx) => (
                             <div
@@ -800,9 +841,34 @@ export default function AdminPortal({ user }) {
                         <div style={{ fontWeight: '700', color: 'var(--tx-1)', fontSize: '0.95rem' }}>{row.name}</div>
                         <div style={{ fontSize: '0.75rem', color: 'var(--tx-3)', marginTop: '2px' }}>
                           {row.itemsTotal}ج + {row.deliveryShare.toFixed(1)}ج delivery
+                          {(row.discountPercent > 0 || row.flatDiscount > 0) && (
+                            <>
+                              {row.discountPercent > 0 && ` • -${row.discountPercent}%`}
+                              {row.flatDiscount > 0 && ` • -${row.flatDiscount}ج`}
+                            </>
+                          )}
                         </div>
+                        {(row.discountPercent > 0 || row.flatDiscount > 0) && (
+                          <div style={{ fontSize: '0.7rem', color: 'var(--green)', marginTop: '2px' }}>
+                            ⬇️ Discounted + Ceiled
+                          </div>
+                        )}
                       </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', minWidth: '220px' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', minWidth: '260px' }}>
+                        {/* Per-user discount controls */}
+                        <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end', alignItems: 'center', flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: '0.7rem', color: 'var(--tx-3)', fontWeight: '700' }}>Disc:</span>
+                          <Button size="xs" variant={row.discountPercent === 0 ? 'secondary' : 'ghost'} onClick={() => handleUpdatePayment(row.name, { discountPercent: 0 })} style={{ padding: '2px 8px', fontSize: '0.7rem' }}>0%</Button>
+                          <Button size="xs" variant={row.discountPercent === 10 ? 'secondary' : 'ghost'} onClick={() => handleUpdatePayment(row.name, { discountPercent: 10 })} style={{ padding: '2px 8px', fontSize: '0.7rem' }}>10%</Button>
+                          <Button size="xs" variant={row.discountPercent === 20 ? 'secondary' : 'ghost'} onClick={() => handleUpdatePayment(row.name, { discountPercent: 20 })} style={{ padding: '2px 8px', fontSize: '0.7rem' }}>20%</Button>
+                          <input
+                            type="number"
+                            placeholder="Comp"
+                            value={row.flatDiscount || 0}
+                            onChange={(e) => handleUpdatePayment(row.name, { flatDiscountPerUser: parseFloat(e.target.value) || 0 })}
+                            style={{ width: '55px', padding: '2px 6px', borderRadius: 'var(--r-sm)', border: '1px solid var(--border-default)', fontSize: '0.75rem', background: 'var(--bg-elevated)', color: 'var(--tx-1)' }}
+                          />
+                        </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', justifyContent: 'flex-end' }}>
                           <span style={{ fontWeight: '800', color: 'var(--gold)', fontSize: '1.1rem' }}>
                             {row.grandTotal.toFixed(1)}ج
@@ -858,7 +924,7 @@ export default function AdminPortal({ user }) {
                   ))}
                   <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 'var(--sp-2)', fontWeight: '800', fontSize: '1.2rem' }}>
                     <span style={{ color: 'var(--tx-1)' }}>Grand Total</span>
-                    <span style={{ color: 'var(--gold)' }}>{dashboardSession.total}ج</span>
+                    <span style={{ color: 'var(--gold)' }}>{costSplit.reduce((sum, r) => sum + r.grandTotal, 0)}ج</span>
                   </div>
                 </div>
               </Card>

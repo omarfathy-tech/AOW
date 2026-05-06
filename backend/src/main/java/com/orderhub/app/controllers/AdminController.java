@@ -13,6 +13,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 import java.util.Map;
@@ -36,6 +37,9 @@ public class AdminController {
     
     @Autowired
     private com.orderhub.app.repositories.OrderRepository orderRepository;
+
+    @Autowired
+    private SimpMessagingTemplate messagingTemplate;
 
     @GetMapping("/sessions")
     public List<OrderSession> getAllSessions() {
@@ -64,7 +68,17 @@ public class AdminController {
         newSession.setDeliveryFee(restaurant.getDeliveryFee());
         newSession.setTotal(restaurant.getDeliveryFee());
 
-        return sessionRepository.save(newSession);
+        OrderSession saved = sessionRepository.save(newSession);
+
+        messagingTemplate.convertAndSend("/topic/notifications", Map.of(
+                "type", "SESSION_STARTED",
+                "sessionId", saved.getId(),
+                "restaurantName", restaurant.getName(),
+                "message", "New session started for " + restaurant.getName(),
+                "timestamp", LocalDateTime.now().toString()
+        ));
+
+        return saved;
     }
 
     @PutMapping("/sessions/{id}/status")
@@ -81,7 +95,15 @@ public class AdminController {
                 .orElseThrow(() -> new RuntimeException("Session not found"));
         session.setStatus("CLOSED");
         session.setClosedAt(LocalDateTime.now());
-        return ResponseEntity.ok(sessionRepository.save(session));
+        OrderSession saved = sessionRepository.save(session);
+        messagingTemplate.convertAndSend("/topic/notifications", Map.of(
+                "type", "SESSION_CLOSED",
+                "sessionId", saved.getId(),
+                "sessionName", saved.getSessionName(),
+                "message", "Session closed: " + saved.getSessionName(),
+                "timestamp", LocalDateTime.now().toString()
+        ));
+        return ResponseEntity.ok(saved);
     }
 
     @PatchMapping("/sessions/{id}/reopen")
@@ -90,7 +112,15 @@ public class AdminController {
                 .orElseThrow(() -> new RuntimeException("Session not found"));
         session.setStatus("OPEN");
         session.setClosedAt(null);
-        return ResponseEntity.ok(sessionRepository.save(session));
+        OrderSession saved = sessionRepository.save(session);
+        messagingTemplate.convertAndSend("/topic/notifications", Map.of(
+                "type", "SESSION_REOPENED",
+                "sessionId", saved.getId(),
+                "sessionName", saved.getSessionName(),
+                "message", "Session reopened: " + saved.getSessionName(),
+                "timestamp", LocalDateTime.now().toString()
+        ));
+        return ResponseEntity.ok(saved);
     }
 
     @PatchMapping("/sessions/{id}/send")
@@ -103,8 +133,6 @@ public class AdminController {
 
         int personCount = session.getPersonOrders().size();
         double dlvPP = personCount > 0 ? session.getDeliveryFee() / personCount : 0;
-        double discountPct = session.getDiscountPercent() != null ? session.getDiscountPercent() : 0.0;
-        double flatDiscount = session.getFlatDiscountPerUser() != null ? session.getFlatDiscountPerUser() : 0.0;
 
         // Mark all person orders as CONFIRMED
         for (PersonOrder po : session.getPersonOrders()) {
@@ -114,7 +142,9 @@ public class AdminController {
             try {
                 User user = userRepository.findByUsername(po.getName()).orElse(null);
                 if (user != null) {
-                    double discountedTotal = calculateDiscountedTotal(po.getSubtotal(), dlvPP, discountPct, flatDiscount);
+                    double userDiscPct = po.getDiscountPercent() != null ? po.getDiscountPercent() : 0.0;
+                    double userFlatDisc = po.getFlatDiscountPerUser() != null ? po.getFlatDiscountPerUser() : 0.0;
+                    double discountedTotal = calculateDiscountedTotal(po.getSubtotal(), dlvPP, userDiscPct, userFlatDisc);
 
                     com.orderhub.app.models.Order mysqlOrder = new com.orderhub.app.models.Order();
                     mysqlOrder.setUser(user);
@@ -144,7 +174,43 @@ public class AdminController {
             }
         }
 
-        return ResponseEntity.ok(sessionRepository.save(session));
+        OrderSession saved = sessionRepository.save(session);
+
+        // Send in-app private "customer service style" order details to each user
+        String restaurantName = restaurantRepository.findById(saved.getRestaurantId())
+            .map(Restaurant::getName)
+            .orElse(saved.getSessionName());
+        for (PersonOrder po : saved.getPersonOrders()) {
+            try {
+                User user = userRepository.findByUsername(po.getName()).orElse(null);
+                if (user == null || user.getId() == null) continue;
+
+                double userDiscPct = po.getDiscountPercent() != null ? po.getDiscountPercent() : 0.0;
+                double userFlatDisc = po.getFlatDiscountPerUser() != null ? po.getFlatDiscountPerUser() : 0.0;
+                String details = buildOrderDetailsMessage(po, restaurantName, saved.getDeliveryFee(), personCount, userDiscPct, userFlatDisc);
+
+                messagingTemplate.convertAndSend("/queue/user/" + user.getId() + "/notifications", Map.of(
+                    "type", "ORDER_DETAILS",
+                    "sessionId", saved.getId(),
+                    "restaurantName", restaurantName,
+                    "message", "Your order details are ready from " + restaurantName,
+                    "details", details,
+                    "sender", "OrderHub Support",
+                    "timestamp", LocalDateTime.now().toString()
+                ));
+            } catch (Exception ignored) {
+                // Never block session send if one user's message fails.
+            }
+        }
+
+        messagingTemplate.convertAndSend("/topic/notifications", Map.of(
+                "type", "SESSION_SENT",
+                "sessionId", saved.getId(),
+                "sessionName", saved.getSessionName(),
+                "message", "Order sent to restaurant: " + saved.getSessionName(),
+                "timestamp", LocalDateTime.now().toString()
+        ));
+        return ResponseEntity.ok(saved);
     }
 
     @DeleteMapping("/sessions/{id}")
@@ -173,25 +239,17 @@ public class AdminController {
                     if (request.containsKey("isPaid")) p.setPaid((Boolean) request.get("isPaid"));
                     if (request.containsKey("paymentMethod")) p.setPaymentMethod((String) request.get("paymentMethod"));
                     if (request.containsKey("amountReceived")) p.setAmountReceived(((Number) request.get("amountReceived")).doubleValue());
+                    if (request.containsKey("discountPercent")) p.setDiscountPercent(((Number) request.get("discountPercent")).doubleValue());
+                    if (request.containsKey("flatDiscountPerUser")) p.setFlatDiscountPerUser(((Number) request.get("flatDiscountPerUser")).doubleValue());
+                    if (request.containsKey("subtotal")) p.setSubtotal(((Number) request.get("subtotal")).doubleValue());
                 });
 
-        return ResponseEntity.ok(sessionRepository.save(session));
-    }
-
-    @PatchMapping("/sessions/{id}/discounts")
-    public ResponseEntity<?> updateSessionDiscounts(
-            @PathVariable String id,
-            @RequestBody Map<String, Object> request) {
-
-        OrderSession session = sessionRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Session not found"));
-
-        if (request.containsKey("discountPercent")) {
-            session.setDiscountPercent(((Number) request.get("discountPercent")).doubleValue());
+        // Recalculate session total
+        double newTotal = session.getDeliveryFee();
+        for (PersonOrder p : session.getPersonOrders()) {
+            newTotal += p.getSubtotal();
         }
-        if (request.containsKey("flatDiscountPerUser")) {
-            session.setFlatDiscountPerUser(((Number) request.get("flatDiscountPerUser")).doubleValue());
-        }
+        session.setTotal(newTotal);
 
         return ResponseEntity.ok(sessionRepository.save(session));
     }
@@ -203,5 +261,46 @@ public class AdminController {
         }
         double afterFlat = afterPercent - flatDiscount;
         return Math.max(0, Math.ceil(afterFlat));
+    }
+
+    private String buildOrderDetailsMessage(PersonOrder personOrder, String restaurantName, double deliveryFee, int personCount, double discountPercent, double flatDiscount) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Order details - ").append(restaurantName).append("\n");
+        sb.append("-------------------------\n");
+
+        if (personOrder.getTextOrder() != null && !personOrder.getTextOrder().isBlank()) {
+            sb.append(personOrder.getTextOrder()).append("\n");
+        } else if (personOrder.getItems() != null) {
+            for (Map<String, Object> item : personOrder.getItems()) {
+                String name = String.valueOf(item.getOrDefault("name", "Item"));
+                String size = String.valueOf(item.getOrDefault("size", "-"));
+                String option = String.valueOf(item.getOrDefault("option", ""));
+                int qty = item.get("quantity") instanceof Number n ? n.intValue() : 1;
+                double price = item.get("price") instanceof Number n ? n.doubleValue() : 0.0;
+                sb.append("- ").append(qty).append("x ").append(name)
+                    .append(" (").append(size).append(")");
+                if (!option.isBlank() && !"null".equalsIgnoreCase(option) && !"عادي".equals(option)) {
+                    sb.append(" ").append(option);
+                }
+                sb.append(" : ").append(Math.round(price * qty)).append(" EGP\n");
+            }
+        }
+
+        double deliveryShare = personCount > 0 ? deliveryFee / personCount : 0;
+        double base = personOrder.getSubtotal() + deliveryShare;
+        double afterPct = discountPercent > 0 ? base * (1 - discountPercent / 100.0) : base;
+        double afterFlat = afterPct - flatDiscount;
+        double total = Math.max(0, Math.ceil(afterFlat));
+
+        sb.append("\nSubtotal: ").append(Math.round(personOrder.getSubtotal())).append(" EGP");
+        sb.append("\nDelivery share: ").append(Math.round(deliveryShare)).append(" EGP");
+        if (discountPercent > 0) sb.append("\nDiscount: -").append(discountPercent).append("%");
+        if (flatDiscount > 0) sb.append("\nCompensation: -").append(Math.round(flatDiscount)).append(" EGP");
+        sb.append("\nTotal: ").append((long) total).append(" EGP");
+
+        if (personOrder.getNotes() != null && !personOrder.getNotes().isBlank()) {
+            sb.append("\nNotes: ").append(personOrder.getNotes());
+        }
+        return sb.toString();
     }
 }

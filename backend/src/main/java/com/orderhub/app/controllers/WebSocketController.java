@@ -8,6 +8,7 @@ import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Controller;
 
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.Map;
 
 @Controller
@@ -69,5 +70,22 @@ public class WebSocketController {
         String userId = (String) payload.get("userId");
         messagingTemplate.convertAndSend("/queue/user/" + userId + "/heartbeat", 
                 Map.of("status", "ack", "serverTime", LocalDateTime.now().toString()));
+    }
+
+    @MessageMapping("/reactions/restaurant")
+    public void reactToRestaurant(@Payload Map<String, Object> payload) {
+        String restaurantName = String.valueOf(payload.getOrDefault("restaurantName", "Restaurant"));
+        String emoji = String.valueOf(payload.getOrDefault("emoji", "👏"));
+        String username = String.valueOf(payload.getOrDefault("username", "Someone"));
+
+        Map<String, Object> message = new HashMap<>();
+        message.put("type", "RESTAURANT_REACTION");
+        message.put("restaurantName", restaurantName);
+        message.put("emoji", emoji);
+        message.put("username", username);
+        message.put("message", username + " reacted " + emoji + " to " + restaurantName);
+        message.put("timestamp", LocalDateTime.now().toString());
+
+        messagingTemplate.convertAndSend("/topic/notifications", message);
     }
 }

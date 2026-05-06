@@ -65,11 +65,13 @@ CREATE TABLE IF NOT EXISTS restaurants (
     delivery_fee DOUBLE,
     owner_user_id BIGINT,
     available TINYINT(1) DEFAULT 1,
-    order_mode VARCHAR(20) DEFAULT 'MENU'
+    order_mode VARCHAR(20) DEFAULT 'MENU',
+    menu_url VARCHAR(500)
 );
 
 ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS available TINYINT(1) DEFAULT 1;
 ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS order_mode VARCHAR(20) DEFAULT 'MENU';
+ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS menu_url VARCHAR(500);
 
 CREATE TABLE IF NOT EXISTS menu_categories (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -112,6 +114,9 @@ CREATE TABLE IF NOT EXISTS order_sessions (
 ALTER TABLE order_sessions ADD COLUMN IF NOT EXISTS discount_percent DOUBLE DEFAULT 0;
 ALTER TABLE order_sessions ADD COLUMN IF NOT EXISTS flat_discount_per_user DOUBLE DEFAULT 0;
 
+ALTER TABLE person_orders ADD COLUMN IF NOT EXISTS discount_percent DOUBLE DEFAULT 0;
+ALTER TABLE person_orders ADD COLUMN IF NOT EXISTS flat_discount_per_user DOUBLE DEFAULT 0;
+
 CREATE TABLE IF NOT EXISTS person_orders (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     session_id VARCHAR(36),
@@ -120,6 +125,8 @@ CREATE TABLE IF NOT EXISTS person_orders (
     subtotal DOUBLE,
     status VARCHAR(50) DEFAULT 'PENDING',
     notes TEXT,
+    discount_percent DOUBLE DEFAULT 0,
+    flat_discount_per_user DOUBLE DEFAULT 0,
     is_paid BOOLEAN DEFAULT FALSE,
     payment_method VARCHAR(50),
     amount_received DOUBLE,

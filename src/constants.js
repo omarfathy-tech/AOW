@@ -26,9 +26,9 @@ export const EXTRAS = [
 
 export const ITEM_EXTRA_OPTIONS = [
   { id: "none",  label: "عادي" },
-  { id: "tahina", label: "طحينة فقط" },
-  { id: "salad",  label: "سلطة فقط" },
   { id: "both",   label: "سلطة + طحينة" },
+  { id: "salad",  label: "سلطة فقط" },
+  { id: "tahina", label: "طحينة فقط" },
 ];
 
 export const DELIVERY = 10;

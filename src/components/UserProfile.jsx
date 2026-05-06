@@ -28,12 +28,18 @@ export default function UserProfile({ user, onBack, onUpdate }) {
   ];
 
   async function handleSave() {
+    const cleaned = (phone || '').trim();
+    if (cleaned && !/^\+?\d{10,15}$/.test(cleaned)) {
+      showToast('Phone must be digits only, e.g. 01021389293 or +201021389293', 'error');
+      return;
+    }
+
     setSaving(true);
     try {
       const res = await fetch(`${API}/users/me`, {
         method: 'PUT',
         headers: getAuthHeaders(),
-        body: JSON.stringify({ fullName, phone, color, avatarUrl })
+        body: JSON.stringify({ fullName, phone: cleaned, color, avatarUrl })
       });
       if (res.ok) {
         const data = await res.json();
@@ -81,9 +87,10 @@ export default function UserProfile({ user, onBack, onUpdate }) {
 
         <Input
           label="Phone Number (for WhatsApp order receipts)"
+          type="tel"
           value={phone}
           onChange={(e) => setPhone(e.target.value)}
-          placeholder="e.g. +201040458295"
+          placeholder="e.g. 01021389293 or +201021389293"
         />
 
         {/* Color Picker */}

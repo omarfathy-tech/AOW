@@ -32,10 +32,10 @@ export default function ItemExtrasModal({
   }
 
   const combos = [
-    { key: 'both', label: 'both', labelAr: 'عادي', desc: 'Salad + Tahini' },
+    { key: 'none', label: 'none', labelAr: 'عادي', desc: 'No extras' },
+    { key: 'both', label: 'both', labelAr: 'سلطة وطحينة', desc: 'Salad + Tahini' },
     { key: 'salad', label: 'salad', labelAr: 'سلطة فقط', desc: 'Salad only' },
     { key: 'tahina', label: 'tahina', labelAr: 'طحينة فقط', desc: 'Tahini only' },
-    { key: 'none', label: 'none', labelAr: 'سادة', desc: 'No toppings' },
   ];
 
   return (

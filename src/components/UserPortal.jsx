@@ -12,6 +12,185 @@ import BottomSheet from './common/BottomSheet';
 import { useSessions } from '../hooks/useSessions';
 import { useToast } from '../context/ToastContext';
 
+/* ── Pizza Order Form ──────────────────────────────────────── */
+function PizzaOrderForm({ user, activeSession, sessionStatus, onSubmitted }) {
+  const showToast = useToast();
+  const [pizzaName, setPizzaName] = useState('');
+  const [size, setSize]           = useState('Medium');
+  const [quantity, setQuantity]   = useState(1);
+  const [drinkName, setDrinkName] = useState('');
+  const [notes, setNotes]         = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [editing, setEditing]     = useState(false);
+  const canOrder = sessionStatus === 'OPEN';
+
+  const myOrder = activeSession?.personOrders?.find(p => p.name === user.username && p.textOrder);
+  const hasOrder = !!myOrder;
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    if (!pizzaName.trim() || !activeSession) return;
+    setSubmitting(true);
+    const textParts = [`🍕 Pizza: ${pizzaName.trim()}`, `Size: ${size}`, `Quantity: ${quantity}`];
+    if (drinkName.trim()) textParts.push(`Drink: ${drinkName.trim()}`);
+    if (notes.trim()) textParts.push(`Notes: ${notes.trim()}`);
+    const text = textParts.join('\n');
+    try {
+      const res = await fetch(`${API}/sessions/${activeSession.id}/text-order`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ text }),
+      });
+      if (res.ok) {
+        setEditing(false);
+        onSubmitted?.();
+        showToast('🍕 Pizza order placed!', 'success');
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || 'Failed to place order', 'error');
+      }
+    } catch {
+      showToast('Network error', 'error');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleDelete() {
+    if (!activeSession) return;
+    try {
+      const res = await fetch(`${API}/sessions/${activeSession.id}/text-order`, {
+        method: 'DELETE', headers: getAuthHeaders(),
+      });
+      if (res.ok) {
+        setEditing(false);
+        setPizzaName(''); setSize('Medium'); setQuantity(1); setDrinkName(''); setNotes('');
+        showToast('Order deleted', 'info');
+      } else {
+        showToast('Failed to delete', 'error');
+      }
+    } catch {
+      showToast('Network error', 'error');
+    }
+  }
+
+  const SIZES = ['Small', 'Medium', 'Large', 'Family'];
+
+  if (!canOrder && !hasOrder) {
+    return (
+      <Card variant="flat" style={{ padding: 'var(--sp-6)', textAlign: 'center', color: 'var(--tx-3)' }}>
+        Ordering is closed for this session.
+      </Card>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' }}>
+      {hasOrder && !editing && (
+        <Card variant="raised" style={{ padding: 'var(--sp-5)', borderLeft: '4px solid var(--gold)' }}>
+          <div style={{ fontSize: '0.75rem', color: 'var(--tx-3)', marginBottom: '8px', fontWeight: '800' }}>
+            YOUR ORDER
+          </div>
+          <div style={{ fontSize: '1.1rem', color: 'var(--tx-1)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+            {myOrder.textOrder}
+          </div>
+          {canOrder && (
+            <div style={{ display: 'flex', gap: '12px', marginTop: 'var(--sp-4)' }}>
+              <Button size="sm" variant="secondary" onClick={() => setEditing(true)}>✏️ Edit</Button>
+              <Button size="sm" variant="ghost" onClick={handleDelete} style={{ color: 'var(--red)', borderColor: 'var(--red)' }}>🗑 Delete</Button>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {(editing || (!hasOrder && canOrder)) && (
+        <Card variant="raised" style={{ padding: 'var(--sp-5)' }}>
+          <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.1rem', marginBottom: 'var(--sp-4)', color: 'var(--tx-1)' }}>🍕 Pizza Order</h3>
+          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' }}>
+            <Input
+              label="Pizza Name *"
+              value={pizzaName}
+              onChange={e => setPizzaName(e.target.value)}
+              placeholder="e.g. Margherita, BBQ Chicken..."
+              required
+              disabled={!canOrder}
+            />
+
+            {/* Size selector */}
+            <div>
+              <div style={{ fontSize: '0.75rem', fontWeight: '700', color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '10px' }}>Size</div>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                {SIZES.map(s => (
+                  <button
+                    key={s}
+                    type="button"
+                    disabled={!canOrder}
+                    onClick={() => setSize(s)}
+                    style={{
+                      padding: '8px 16px',
+                      borderRadius: 'var(--r-md)',
+                      border: size === s ? '2px solid var(--gold)' : '1px solid var(--border-default)',
+                      background: size === s ? 'var(--gold-glow)' : 'var(--bg-elevated)',
+                      color: size === s ? 'var(--gold)' : 'var(--tx-2)',
+                      fontWeight: size === s ? '800' : '600',
+                      cursor: canOrder ? 'pointer' : 'default',
+                      fontSize: '0.85rem',
+                      transition: 'all 0.15s',
+                    }}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Quantity */}
+            <div>
+              <div style={{ fontSize: '0.75rem', fontWeight: '700', color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '10px' }}>Quantity</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <button type="button" disabled={!canOrder || quantity <= 1} onClick={() => setQuantity(q => Math.max(1, q - 1))}
+                  style={{ width: '36px', height: '36px', borderRadius: 'var(--r-md)', border: '1px solid var(--border-default)', background: 'var(--bg-elevated)', color: 'var(--tx-1)', fontWeight: '800', fontSize: '1.1rem', cursor: 'pointer' }}>−</button>
+                <span style={{ fontWeight: '800', fontSize: '1.25rem', minWidth: '30px', textAlign: 'center', color: 'var(--tx-1)' }}>{quantity}</span>
+                <button type="button" disabled={!canOrder} onClick={() => setQuantity(q => q + 1)}
+                  style={{ width: '36px', height: '36px', borderRadius: 'var(--r-md)', border: '1px solid var(--border-default)', background: 'var(--bg-elevated)', color: 'var(--tx-1)', fontWeight: '800', fontSize: '1.1rem', cursor: 'pointer' }}>+</button>
+              </div>
+            </div>
+
+            <Input
+              label="Drink (optional)"
+              value={drinkName}
+              onChange={e => setDrinkName(e.target.value)}
+              placeholder="e.g. Pepsi, Water, Juice..."
+              disabled={!canOrder}
+            />
+
+            <Input
+              label="Notes (optional)"
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              placeholder="e.g. extra cheese, no mushrooms..."
+              disabled={!canOrder}
+            />
+
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: 'var(--sp-2)' }}>
+              {hasOrder && (
+                <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>Cancel</Button>
+              )}
+              <Button
+                size="sm"
+                type="submit"
+                disabled={!canOrder || submitting || !pizzaName.trim()}
+              >
+                {submitting ? 'Placing Order…' : hasOrder ? 'Update Order' : '🍕 Place Pizza Order'}
+              </Button>
+            </div>
+          </form>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 function SuccessCheckmark() {
   return (
     <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 'var(--sp-4)' }}>
@@ -228,21 +407,6 @@ export default function UserPortal({ user, restaurant, onBack }) {
         setOrderNotes("");
         setIsCartOpen(false);
         showToast(orderSubmitted ? "Order updated successfully!" : "Order submitted successfully!", "success");
-        // Send WhatsApp receipt if user has phone
-        if (user?.phone) {
-          const lines = [
-            `🧺 Your Order — ${restaurant.name}`,
-            `━━━━━━━━━━━━━━━`,
-            ...payload.items.map(i => `• ${i.quantity > 1 ? i.quantity + '× ' : ''}${i.name} ${i.size !== '-' ? '(' + i.size + ')' : ''}${i.option && i.option !== 'عادي' ? ' — ' + i.option : ''} — ${i.price}ج`),
-            ``,
-            `Subtotal: ${subtotal.toFixed(1)}ج`,
-            `Delivery share: ${(restaurant.deliveryFee / (activeSession?.personOrders?.length || 1)).toFixed(1)}ج`,
-            `*Total: ${(subtotal + (restaurant.deliveryFee / (activeSession?.personOrders?.length || 1))).toFixed(1)}ج*`
-          ];
-          const phone = user.phone.replace(/\+/g, '');
-          const url = `https://wa.me/${phone}?text=${encodeURIComponent(lines.join('\n'))}`;
-          window.open(url, '_blank');
-        }
       } else {
         showToast("Failed to submit order", "error");
       }
@@ -428,7 +592,43 @@ export default function UserPortal({ user, restaurant, onBack }) {
           </div>
         )}
         
-        {restaurant.orderMode === 'TEXT' ? (
+        {restaurant.menuUrl && (
+          <a
+            href={restaurant.menuUrl}
+            target="_blank"
+            rel="noreferrer"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px',
+              padding: '14px',
+              background: 'linear-gradient(135deg, #ff6b35, #f7c59f)',
+              borderRadius: 'var(--r-lg)',
+              color: 'white',
+              fontWeight: '800',
+              fontSize: '0.95rem',
+              textDecoration: 'none',
+              boxShadow: '0 4px 16px rgba(255,107,53,0.35)',
+              transition: 'transform 0.15s, box-shadow 0.15s',
+              marginBottom: 'var(--sp-4)',
+            }}
+            onMouseOver={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 8px 24px rgba(255,107,53,0.45)'; }}
+            onMouseOut={e => { e.currentTarget.style.transform = ''; e.currentTarget.style.boxShadow = '0 4px 16px rgba(255,107,53,0.35)'; }}
+          >
+            {restaurant.cuisineType === 'PITZA' ? '🍕 View Full Menu' : '📋 View Menu'}
+            <span style={{ fontSize: '0.75rem', opacity: 0.85 }}>↗</span>
+          </a>
+        )}
+
+        {restaurant.cuisineType === 'PITZA' ? (
+          <PizzaOrderForm
+            user={user}
+            activeSession={activeSession}
+            sessionStatus={sessionStatus}
+            onSubmitted={() => setOrderSubmitted(true)}
+          />
+        ) : restaurant.orderMode === 'TEXT' ? (
           <ChatOrder
             user={user}
             activeSession={activeSession}
