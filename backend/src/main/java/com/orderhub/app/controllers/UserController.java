@@ -45,6 +45,7 @@ public class UserController {
         userMap.put("phone", user.getPhone());
         userMap.put("role", user.getRole().name());
         userMap.put("color", user.getColor());
+        userMap.put("avatarUrl", user.getAvatarUrl());
         userMap.put("favorites", user.getFavoritesJson() != null ? user.getFavoritesJson() : "[]");
         userMap.put("lastActive", null);
         return ResponseEntity.ok(userMap);
@@ -132,7 +133,10 @@ public class UserController {
         if (request.containsKey("color")) {
             user.setColor(request.get("color"));
         }
-        
+        if (request.containsKey("avatarUrl")) {
+            user.setAvatarUrl(request.get("avatarUrl"));
+        }
+
         userRepository.save(user);
         
         return ResponseEntity.ok(Map.of(
@@ -143,7 +147,8 @@ public class UserController {
                 "fullName", user.getFullName(),
                 "phone", user.getPhone(),
                 "role", user.getRole().name(),
-                "color", user.getColor()
+                "color", user.getColor(),
+                "avatarUrl", user.getAvatarUrl()
             )
         ));
     }

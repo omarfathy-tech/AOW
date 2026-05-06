@@ -13,10 +13,10 @@ import java.util.List;
 public interface OrderRepository extends JpaRepository<Order, Long> {
     List<Order> findByUserId(Long userId);
     Page<Order> findByUserId(Long userId, Pageable pageable);
-    List<Order> findByRestaurantId(String restaurantId);
-    Page<Order> findByRestaurantId(String restaurantId, Pageable pageable);
+    List<Order> findByRestaurantId(Long restaurantId);
+    Page<Order> findByRestaurantId(Long restaurantId, Pageable pageable);
     List<Order> findBySessionId(String sessionId);
     List<Order> findByStatus(OrderStatus status);
     List<Order> findByUserIdAndStatus(Long userId, OrderStatus status);
-    List<Order> findByRestaurantIdAndStatus(String restaurantId, OrderStatus status);
+    List<Order> findByRestaurantIdAndStatus(Long restaurantId, OrderStatus status);
 }

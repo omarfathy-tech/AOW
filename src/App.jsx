@@ -6,6 +6,7 @@ import UserPortal from "./components/UserPortal";
 import AdminPortal from "./components/AdminPortal";
 import OrderHistoryPage from "./components/OrderHistoryPage";
 import RestaurantList from "./components/RestaurantList";
+import UserProfile from "./components/UserProfile";
 import { useAuth } from "./hooks/useAuth";
 import { useAppHealth } from "./hooks/useAppHealth";
 import { ToastProvider } from "./context/ToastContext";
@@ -20,6 +21,11 @@ export default function OrderHubApp() {
     return "hub";
   });
   const [selectedRestaurant, setSelectedRestaurant] = useState(null);
+
+  function handleUpdateUser(updated) {
+    // Refresh auth context user data
+    window.location.reload();
+  }
 
   const handleLogout = async () => {
     await logout();
@@ -87,13 +93,17 @@ export default function OrderHubApp() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-3)' }}>
             {/* User Avatar & Logout Toggle */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
-              <div style={{
-                width: '32px', height: '32px', borderRadius: '50%',
-                background: 'var(--gold-glow)',
-                border: '1px solid var(--gold)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontWeight: '800', fontSize: '0.75rem', color: 'var(--gold)'
-              }}>{initials}</div>
+              <button
+                onClick={() => setView(view === "profile" ? "hub" : "profile")}
+                style={{
+                  width: '32px', height: '32px', borderRadius: '50%',
+                  background: user?.avatarUrl ? `url(${user.avatarUrl}) center/cover` : avatarColor,
+                  border: '1px solid var(--gold)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontWeight: '800', fontSize: '0.75rem', color: 'white',
+                  cursor: 'pointer', padding: 0, overflow: 'hidden'
+                }}
+              >{!user?.avatarUrl && initials}</button>
               {!isAdmin && (
                 <button 
                   onClick={() => setView(view === "history" ? "hub" : "history")}
@@ -137,13 +147,15 @@ export default function OrderHubApp() {
         <main style={{ flex: 1 }}>
           {isAdmin ? (
             <AdminPortal user={user} />
+          ) : view === "profile" ? (
+            <UserProfile user={user} onBack={() => setView("hub")} onUpdate={handleUpdateUser} />
           ) : view === "history" ? (
             <OrderHistoryPage user={user} isAdmin={isAdmin} />
           ) : view === "portal" && selectedRestaurant ? (
-            <UserPortal 
-              user={user} 
-              restaurant={selectedRestaurant} 
-              onBack={() => { setView("hub"); setSelectedRestaurant(null); }} 
+            <UserPortal
+              user={user}
+              restaurant={selectedRestaurant}
+              onBack={() => { setView("hub"); setSelectedRestaurant(null); }}
             />
           ) : (
             <div style={{ padding: 'var(--sp-4)' }}>

@@ -28,8 +28,8 @@ public class Order {
     @JoinColumn(name = "user_id", nullable = false)
     private User user;
 
-    @Column(nullable = false)
-    private String restaurantId; // MongoDB restaurant reference
+    @Column(name = "restaurant_id", nullable = false)
+    private Long restaurantId; // MySQL restaurant reference
 
     @Column(name = "session_id")
     private String sessionId; // MongoDB session reference

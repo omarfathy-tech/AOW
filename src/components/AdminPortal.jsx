@@ -7,6 +7,7 @@ import Card from './common/Card';
 import StatusBadge from './common/StatusBadge';
 import { useSessions } from '../hooks/useSessions';
 import { useToast } from '../context/ToastContext';
+import RestaurantManager from './RestaurantManager';
 
 function Countdown({ deadline }) {
   const [remaining, setRemaining] = useState('');
@@ -42,6 +43,7 @@ function Countdown({ deadline }) {
 }
 
 export default function AdminPortal({ user }) {
+  const [activeTab, setActiveTab] = useState('sessions');
   const [restaurants, setRestaurants] = useState([]);
   const { activeSessions, refreshSessions } = useSessions();
   const [dashboardSession, setDashboardSession] = useState(null);
@@ -225,6 +227,22 @@ export default function AdminPortal({ user }) {
     } catch (err) { console.error(err); }
   };
 
+  const handleUpdateDiscounts = async (updates) => {
+    if (!dashboardSession) return;
+    try {
+      const res = await fetch(`${API}/admin/sessions/${dashboardSession.id}/discounts`, {
+        method: 'PATCH',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(updates)
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setDashboardSession(updated);
+        showToast('Discounts updated', 'success');
+      }
+    } catch (err) { console.error(err); }
+  };
+
   const handleSendToWhatsApp = async () => {
     if (!dashboardSession) return;
 
@@ -244,13 +262,14 @@ export default function AdminPortal({ user }) {
 
     dashboardSession.personOrders.forEach(p => {
       p.items.forEach(i => {
+        const qty = i.quantity || 1;
         if (i.option === 'إضافة') {
-          byExtra[i.name] = (byExtra[i.name] || 0) + 1;
+          byExtra[i.name] = (byExtra[i.name] || 0) + qty;
         } else {
           if (!bySize[i.size]) bySize[i.size] = {};
           const lbl =
             i.option === 'عادي' || !i.option ? i.name : `${i.name} ${i.option}`;
-          bySize[i.size][lbl] = (bySize[i.size][lbl] || 0) + 1;
+          bySize[i.size][lbl] = (bySize[i.size][lbl] || 0) + qty;
         }
       });
     });
@@ -280,15 +299,21 @@ export default function AdminPortal({ user }) {
     dashboardSession.personOrders.forEach(p => {
       lines.push(`👤 *${p.name}*`);
       if (p.notes) lines.push(`  ✍️ ${p.notes}`);
-      p.items.forEach(i => {
-        const isExtra = i.option === 'إضافة';
-        const optStr =
-          !isExtra && i.option !== 'عادي' && i.option ? ` - ${i.option}` : '';
-        const pre = isExtra ? '+' : '•';
-        lines.push(
-          `  └ ${pre} ${i.name} ${!isExtra ? `(${i.size})` : ''}${optStr} — ${i.price}ج`
-        );
-      });
+      if (p.textOrder) {
+        lines.push(`  💬 ${p.textOrder}`);
+      } else {
+        p.items.forEach(i => {
+          const isExtra = i.option === 'إضافة';
+          const optStr =
+            !isExtra && i.option !== 'عادي' && i.option ? ` - ${i.option}` : '';
+          const pre = isExtra ? '+' : '•';
+          const qty = i.quantity || 1;
+          const qtyStr = qty > 1 ? `${qty}× ` : '';
+          lines.push(
+            `  └ ${pre} ${qtyStr}${i.name} ${!isExtra ? `(${i.size})` : ''}${optStr} — ${(i.price * qty).toFixed(1)}ج`
+          );
+        });
+      }
       lines.push(
         `  🧾 *Subtotal:* ${p.subtotal}ج + ${dlvPP.toFixed(1)}ج delivery = *${(
           p.subtotal + dlvPP
@@ -297,13 +322,14 @@ export default function AdminPortal({ user }) {
     });
 
     lines.push('\n💸 *Financials*');
-    lines.push(
-      `• Subtotal: ${(dashboardSession.total - dashboardSession.deliveryFee).toFixed(1)}ج`
-    );
-    lines.push(
-      `• Delivery: ${dashboardSession.deliveryFee}ج (${dlvPP.toFixed(1)}ج/person)`
-    );
-    lines.push(`💵 *Grand Total: ${dashboardSession.total}ج*`);
+    const discPct = dashboardSession.discountPercent || 0;
+    const flatDisc = dashboardSession.flatDiscountPerUser || 0;
+    lines.push(`• Subtotal: ${(dashboardSession.total - dashboardSession.deliveryFee).toFixed(1)}ج`);
+    lines.push(`• Delivery: ${dashboardSession.deliveryFee}ج (${dlvPP.toFixed(1)}ج/person)`);
+    if (discPct > 0) lines.push(`• Discount: ${discPct}% off per person`);
+    if (flatDisc > 0) lines.push(`• Compensation: ${flatDisc.toFixed(0)}ج off per person`);
+    const totalWithCeil = costSplit.reduce((sum, r) => sum + r.grandTotal, 0);
+    lines.push(`💵 *Grand Total: ${totalWithCeil}ج*`);
 
     const encodedText = encodeURIComponent(lines.join('\n'));
     // The number requested by the user: +201040458295 (removing +)
@@ -360,15 +386,26 @@ export default function AdminPortal({ user }) {
   const costSplit = useMemo(() => {
     if (!dashboardSession || !dashboardSession.personOrders || dashboardSession.personOrders.length === 0) return [];
     const dlvPP = dashboardSession.deliveryFee / dashboardSession.personOrders.length;
-    return dashboardSession.personOrders.map(p => ({
-      name: p.name,
-      itemsTotal: p.subtotal,
-      deliveryShare: dlvPP,
-      grandTotal: p.subtotal + dlvPP,
-      isPaid: p.isPaid || false,
-      paymentMethod: p.paymentMethod || "",
-      amountReceived: p.amountReceived || ""
-    }));
+    const discPct = dashboardSession.discountPercent || 0;
+    const flatDisc = dashboardSession.flatDiscountPerUser || 0;
+    return dashboardSession.personOrders.map(p => {
+      const base = p.subtotal + dlvPP;
+      let afterPct = base;
+      if (discPct > 0) afterPct = base * (1 - discPct / 100);
+      let afterFlat = afterPct - flatDisc;
+      const grandTotal = Math.max(0, Math.ceil(afterFlat));
+      return {
+        name: p.name,
+        itemsTotal: p.subtotal,
+        deliveryShare: dlvPP,
+        discountPercent: discPct,
+        flatDiscount: flatDisc,
+        grandTotal,
+        isPaid: p.isPaid || false,
+        paymentMethod: p.paymentMethod || "",
+        amountReceived: p.amountReceived || ""
+      };
+    });
   }, [dashboardSession]);
 
   const isSent = dashboardSession?.status === 'SENT';
@@ -382,22 +419,27 @@ export default function AdminPortal({ user }) {
     >
       {/* ── Sticky session picker ── */}
       <div
+        className="glass-header"
         style={{
           position: 'sticky',
           top: 0,
           zIndex: 100,
-          background: 'var(--bg-base)',
-          borderBottom: '1px solid var(--border-subtle)',
+          background: 'var(--glass-header-bg)',
+          backdropFilter: 'blur(20px) saturate(180%)',
+          WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+          borderBottom: '1px solid var(--glass-header-border)',
           padding: 'var(--sp-3) 0',
+          boxShadow: 'var(--glass-header-shadow)',
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 var(--sp-4)', marginBottom: '8px' }}>
-           <h3 style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: 'var(--tx-3)', fontWeight: '800', letterSpacing: '0.08em', margin: 0 }}>
-             Actives
-           </h3>
-           <Button variant="ghost" size="sm" onClick={() => window.open(window.location.origin + window.location.pathname + '?adminHistory=true', '_blank')} style={{ fontSize: '0.75rem', padding: '4px 10px' }}>
-             📜 View All History
-           </Button>
+          <h3 style={{ fontSize: '0.8rem', textTransform: 'uppercase', color: 'var(--tx-2)', fontWeight: '800', letterSpacing: '0.1em', margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--green)', display: 'inline-block', boxShadow: '0 0 8px var(--green)' }} />
+            Active Sessions
+          </h3>
+          <Button variant="ghost" size="sm" onClick={() => window.open(window.location.origin + window.location.pathname + '?adminHistory=true', '_blank')} style={{ fontSize: '0.75rem', padding: '4px 10px' }}>
+            📜 View All History
+          </Button>
         </div>
         <div
           style={{
@@ -409,8 +451,8 @@ export default function AdminPortal({ user }) {
           }}
         >
           {activeSessions.length === 0 && (
-            <span style={{ color: 'var(--tx-3)', fontSize: '0.85rem', padding: '8px 4px' }}>
-              No active sessions
+            <span style={{ color: 'var(--tx-3)', fontSize: '0.9rem', padding: '10px 4px', fontWeight: '600' }}>
+              No active sessions — start one below
             </span>
           )}
           {activeSessions.map(sess => {
@@ -418,31 +460,82 @@ export default function AdminPortal({ user }) {
             return (
               <button
                 key={sess.id}
-                onClick={() => { setDashboardSession(sess); setPaidUsers({}); }}
+                onClick={() => { setDashboardSession(sess); setPaidUsers({}); setActiveTab('sessions'); }}
+                className={isActive ? 'session-pill-active' : 'session-pill'}
                 style={{
-                  padding: '8px 16px',
+                  padding: '10px 18px',
                   borderRadius: 'var(--r-full)',
                   border: isActive ? '1px solid var(--gold)' : '1px solid var(--border-strong)',
                   background: isActive ? 'var(--gold-glow)' : 'var(--bg-elevated)',
                   color: isActive ? 'var(--gold)' : 'var(--tx-2)',
                   fontWeight: '700',
-                  fontSize: '0.85rem',
+                  fontSize: '0.9rem',
                   whiteSpace: 'nowrap',
                   cursor: 'pointer',
                   transition: 'all var(--dur-base)',
                   fontFamily: 'var(--font-body)',
+                  boxShadow: isActive ? 'var(--shadow-gold)' : 'none',
                 }}
               >
                 {sess.sessionName.split(' Lunch ')[0]}
+                <span style={{ 
+                  marginLeft: '6px', 
+                  fontSize: '0.7rem', 
+                  background: isActive ? 'rgba(217,119,6,0.15)' : 'var(--bg-base)', 
+                  padding: '2px 6px', 
+                  borderRadius: 'var(--r-full)' 
+                }}>
+                  {sess.personOrders?.length || 0}
+                </span>
               </button>
             );
           })}
+        </div>
+
+        {/* ── Tab switcher ── */}
+        <div style={{ display: 'flex', gap: 'var(--sp-2)', padding: 'var(--sp-2) var(--sp-4) 0', marginTop: 'var(--sp-2)', borderTop: '1px solid var(--border-subtle)' }}>
+          <button
+            onClick={() => setActiveTab('sessions')}
+            style={{
+              padding: '6px 14px',
+              borderRadius: 'var(--r-md)',
+              border: 'none',
+              background: activeTab === 'sessions' ? 'var(--gold-glow)' : 'transparent',
+              color: activeTab === 'sessions' ? 'var(--gold)' : 'var(--tx-3)',
+              fontWeight: '700',
+              fontSize: '0.85rem',
+              cursor: 'pointer',
+              transition: 'all var(--dur-base)',
+              fontFamily: 'var(--font-body)',
+            }}
+          >
+            📋 Sessions
+          </button>
+          <button
+            onClick={() => setActiveTab('management')}
+            style={{
+              padding: '6px 14px',
+              borderRadius: 'var(--r-md)',
+              border: 'none',
+              background: activeTab === 'management' ? 'var(--gold-glow)' : 'transparent',
+              color: activeTab === 'management' ? 'var(--gold)' : 'var(--tx-3)',
+              fontWeight: '700',
+              fontSize: '0.85rem',
+              cursor: 'pointer',
+              transition: 'all var(--dur-base)',
+              fontFamily: 'var(--font-body)',
+            }}
+          >
+            🏪 Management
+          </button>
         </div>
       </div>
 
       <main style={{ padding: 'var(--sp-4)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-6)' }}>
 
-        {dashboardSession ? (
+        {activeTab === 'management' ? (
+          <RestaurantManager />
+        ) : dashboardSession ? (
           <>
             {/* ── Session header ── */}
             <Card variant="raised" style={{ padding: 'var(--sp-5)' }}>
@@ -467,7 +560,7 @@ export default function AdminPortal({ user }) {
                 </div>
               </div>
 
-              {isSent ? (
+              {isSent && (
                 <div
                   style={{
                     padding: '14px',
@@ -477,12 +570,14 @@ export default function AdminPortal({ user }) {
                     textAlign: 'center',
                     fontWeight: '700',
                     fontSize: '0.95rem',
+                    marginBottom: '12px',
                   }}
                 >
                   ✅ Order sent to restaurant
                 </div>
-              ) : (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '12px' }}>
+              )}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '12px' }}>
+                {!isSent && (
                   <Button
                     variant="ghost"
                     onClick={handleToggleLock}
@@ -494,23 +589,23 @@ export default function AdminPortal({ user }) {
                   >
                     {isOpen ? '🔒 Lock Session' : '🔓 Reopen'}
                   </Button>
-                  {dashboardSession.personOrders.length > 0 && (
-                    <Button
-                      onClick={handleSendToWhatsApp}
-                      style={{ background: 'var(--green)', color: 'white', border: 'none', height: '52px' }}
-                    >
-                      Send Summary 🚀
-                    </Button>
-                  )}
+                )}
+                {!isSent && dashboardSession.personOrders.length > 0 && (
                   <Button
-                    variant="ghost"
-                    onClick={handleDeleteSession}
-                    style={{ borderColor: 'var(--red)', color: 'var(--red)', height: '52px' }}
+                    onClick={handleSendToWhatsApp}
+                    style={{ background: 'var(--green)', color: 'white', border: 'none', height: '52px' }}
                   >
-                    🗑 Delete
+                    Send Summary 🚀
                   </Button>
-                </div>
-              )}
+                )}
+                <Button
+                  variant="ghost"
+                  onClick={handleDeleteSession}
+                  style={{ borderColor: 'var(--red)', color: 'var(--red)', height: '52px' }}
+                >
+                  🗑 Delete
+                </Button>
+              </div>
             </Card>
 
             {/* ── Live aggregation ── */}
@@ -647,22 +742,28 @@ export default function AdminPortal({ user }) {
                         </div>
                       </div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                        {p.items.map((i, iIdx) => (
-                          <div
-                            key={iIdx}
-                            style={{
-                              fontSize: '0.825rem',
-                              color: i.option === 'إضافة' ? 'var(--green)' : 'var(--tx-2)',
-                              display: 'flex',
-                              justifyContent: 'space-between',
-                            }}
-                          >
-                            <span>
-                              {i.option === 'إضافة' ? `+ ${i.name}` : `• ${i.name} (${i.size})`}
-                            </span>
-                            <span>{i.price}ج</span>
+                        {p.textOrder ? (
+                          <div style={{ fontSize: '0.9rem', color: 'var(--tx-1)', whiteSpace: 'pre-wrap', lineHeight: 1.4, background: 'var(--bg-base)', padding: '8px', borderRadius: 'var(--r-sm)' }}>
+                            {p.textOrder}
                           </div>
-                        ))}
+                        ) : (
+                          p.items.map((i, iIdx) => (
+                            <div
+                              key={iIdx}
+                              style={{
+                                fontSize: '0.825rem',
+                                color: i.option === 'إضافة' ? 'var(--green)' : 'var(--tx-2)',
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                              }}
+                            >
+                              <span>
+                                {i.option === 'إضافة' ? `+ ${i.name}` : `• ${i.name} (${i.size})`}
+                              </span>
+                              <span>{i.price}ج</span>
+                            </div>
+                          ))
+                        )}
                       </div>
                       {p.notes && (
                         <div style={{ marginTop: '10px', fontSize: '0.775rem', color: 'var(--gold)', fontStyle: 'italic' }}>
@@ -727,25 +828,25 @@ export default function AdminPortal({ user }) {
                           </button>
                         </div>
                         <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-                             <select 
-                               value={row.paymentMethod} 
-                               onChange={(e) => handleUpdatePayment(row.name, { paymentMethod: e.target.value })}
-                               style={{ padding: '4px 8px', borderRadius: 'var(--r-sm)', border: '1px solid var(--border-default)', fontSize: '0.8rem', background: 'var(--bg-elevated)', color: 'var(--tx-2)' }}
-                             >
-                               <option value="">Method...</option>
-                               <option value="CASH">Cash</option>
-                               <option value="VODAFONE">Vodafone</option>
-                               <option value="INSTAPAY">Instapay</option>
-                             </select>
-                             {row.paymentMethod === 'CASH' && (
-                               <input 
-                                 type="number" 
-                                 defaultValue={row.amountReceived}
-                                 onBlur={(e) => handleUpdatePayment(row.name, { amountReceived: parseFloat(e.target.value) || 0 })}
-                                 placeholder="Received (ج)"
-                                 style={{ width: '85px', padding: '4px 6px', borderRadius: 'var(--r-sm)', border: '1px solid var(--border-default)', fontSize: '0.8rem', background: 'var(--bg-elevated)', color: 'var(--tx-1)' }}
-                               />
-                             )}
+                          <select
+                            value={row.paymentMethod}
+                            onChange={(e) => handleUpdatePayment(row.name, { paymentMethod: e.target.value })}
+                            style={{ padding: '4px 8px', borderRadius: 'var(--r-sm)', border: '1px solid var(--border-default)', fontSize: '0.8rem', background: 'var(--bg-elevated)', color: 'var(--tx-2)' }}
+                          >
+                            <option value="">Method...</option>
+                            <option value="CASH">Cash</option>
+                            <option value="VODAFONE">Vodafone</option>
+                            <option value="INSTAPAY">Instapay</option>
+                          </select>
+                          {row.paymentMethod === 'CASH' && (
+                            <input
+                              type="number"
+                              defaultValue={row.amountReceived}
+                              onBlur={(e) => handleUpdatePayment(row.name, { amountReceived: parseFloat(e.target.value) || 0 })}
+                              placeholder="Received (ج)"
+                              style={{ width: '85px', padding: '4px 6px', borderRadius: 'var(--r-sm)', border: '1px solid var(--border-default)', fontSize: '0.8rem', background: 'var(--bg-elevated)', color: 'var(--tx-1)' }}
+                            />
+                          )}
                         </div>
                         {row.paymentMethod === 'CASH' && row.amountReceived > 0 && (
                           <div style={{ fontSize: '0.75rem', textAlign: 'right', color: 'var(--tx-2)', marginTop: '2px' }}>
@@ -770,6 +871,8 @@ export default function AdminPortal({ user }) {
           </div>
         )}
 
+        {activeTab === 'sessions' && (
+        <>
         {/* ── Start new session ── */}
         <Card variant="raised" style={{ padding: 'var(--sp-5)' }}>
           <h3
@@ -809,10 +912,10 @@ export default function AdminPortal({ user }) {
                   {rest.cuisineType === 'PITZA'
                     ? '🍕'
                     : rest.cuisineType === 'BURGER'
-                    ? '🍔'
-                    : rest.cuisineType === 'CHICKEN'
-                    ? '🍗'
-                    : '🍴'}
+                      ? '🍔'
+                      : rest.cuisineType === 'CHICKEN'
+                        ? '🍗'
+                        : '🍴'}
                 </span>
                 <span style={{ fontSize: '0.875rem', fontWeight: '700', textAlign: 'center' }}>{rest.name}</span>
               </button>
@@ -870,6 +973,8 @@ export default function AdminPortal({ user }) {
             </div>
           )}
         </Card>
+        </>
+        )}
 
       </main>
     </div>

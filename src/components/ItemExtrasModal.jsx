@@ -1,29 +1,57 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import BottomSheet from './common/BottomSheet';
 import Button from './common/Button';
 
-export default function ItemExtrasModal({ 
-  pendingItem, 
-  pendingExtraChoice, 
-  setPendingExtraChoice, 
-  onConfirm 
+export default function ItemExtrasModal({
+  pendingItem,
+  onConfirm
 }) {
+  const [split, setSplit] = useState({ both: 0, salad: 0, tahina: 0, none: 0 });
+
+  useEffect(() => {
+    if (pendingItem) setSplit({ both: 0, salad: 0, tahina: 0, none: 0 });
+  }, [pendingItem?.itemName, pendingItem?.size]);
+
   if (!pendingItem) return null;
 
+  const total = split.none + split.salad + split.tahina + split.both;
+  const totalPrice = pendingItem.price * total;
+
+  function updateCombo(key, delta) {
+    setSplit(prev => ({ ...prev, [key]: Math.max(0, prev[key] + delta) }));
+  }
+
+  function handleConfirm() {
+    const combos = [];
+    if (split.none > 0) combos.push({ optionId: 'none', qty: split.none });
+    if (split.salad > 0) combos.push({ optionId: 'salad', qty: split.salad });
+    if (split.tahina > 0) combos.push({ optionId: 'tahina', qty: split.tahina });
+    if (split.both > 0) combos.push({ optionId: 'both', qty: split.both });
+    if (combos.length === 0) return;
+    onConfirm(false, combos);
+  }
+
+  const combos = [
+    { key: 'both', label: 'both', labelAr: 'عادي', desc: 'Salad + Tahini' },
+    { key: 'salad', label: 'salad', labelAr: 'سلطة فقط', desc: 'Salad only' },
+    { key: 'tahina', label: 'tahina', labelAr: 'طحينة فقط', desc: 'Tahini only' },
+    { key: 'none', label: 'none', labelAr: 'سادة', desc: 'No toppings' },
+  ];
+
   return (
-    <BottomSheet 
-      isOpen={!!pendingItem} 
+    <BottomSheet
+      isOpen={!!pendingItem}
       onClose={() => onConfirm(true)}
       title="Customize Order"
     >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-6)' }}>
-        
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-5)' }}>
+
         {/* Item Info Card */}
-        <div style={{ 
-          padding: 'var(--sp-4)', 
-          background: 'var(--bg-elevated)', 
-          borderRadius: 'var(--r-md)', 
-          border: '1px solid var(--border-strong)' 
+        <div style={{
+          padding: 'var(--sp-4)',
+          background: 'var(--bg-elevated)',
+          borderRadius: 'var(--r-md)',
+          border: '1px solid var(--border-strong)'
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '4px' }}>
             <div style={{ fontFamily: 'var(--font-display)', fontSize: '1.25rem', color: 'var(--tx-1)' }}>{pendingItem.itemName}</div>
@@ -32,57 +60,63 @@ export default function ItemExtrasModal({
           <div style={{ color: "var(--tx-2)", fontSize: '0.85rem', fontWeight: '500' }}>Size: {pendingItem.size}</div>
         </div>
 
-        {/* Customization Options */}
+        {/* Combo Quantity Stepper */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
-          <h4 style={{ 
-            color: 'var(--tx-3)', 
-            fontSize: '0.75rem', 
-            textTransform: 'uppercase', 
+          <h4 style={{
+            color: 'var(--tx-3)',
+            fontSize: '0.75rem',
+            textTransform: 'uppercase',
             letterSpacing: '0.1em',
             fontWeight: '800'
           }}>
-            Traditional Toppings
+            How many of each?
           </h4>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-            <button
-              onClick={() => setPendingExtraChoice(prev => ({ ...prev, salad: !prev.salad }))}
-              style={{
-                height: '56px',
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {combos.map(c => (
+              <div key={c.key} style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '10px 14px',
+                background: 'var(--bg-base)',
                 borderRadius: 'var(--r-md)',
-                border: '1px solid',
-                borderColor: pendingExtraChoice.salad ? 'var(--gold)' : 'var(--border-strong)',
-                background: pendingExtraChoice.salad ? 'var(--gold-glow)' : 'var(--bg-base)',
-                color: pendingExtraChoice.salad ? 'var(--gold)' : 'var(--tx-2)',
-                fontWeight: '700',
-                cursor: 'pointer',
-                transition: 'all var(--dur-base) var(--ease-out)',
-                fontSize: '1rem'
-              }}
-            >
-              Salad (سلطة)
-            </button>
-            <button
-              onClick={() => setPendingExtraChoice(prev => ({ ...prev, tahina: !prev.tahina }))}
-              style={{
-                height: '56px',
-                borderRadius: 'var(--r-md)',
-                border: '1px solid',
-                borderColor: pendingExtraChoice.tahina ? 'var(--gold)' : 'var(--border-strong)',
-                background: pendingExtraChoice.tahina ? 'var(--gold-glow)' : 'var(--bg-base)',
-                color: pendingExtraChoice.tahina ? 'var(--gold)' : 'var(--tx-2)',
-                fontWeight: '700',
-                cursor: 'pointer',
-                transition: 'all var(--dur-base) var(--ease-out)',
-                fontSize: '1rem'
-              }}
-            >
-              Tahini (طحينة)
-            </button>
+                border: '1px solid var(--border-default)'
+              }}>
+                <div>
+                  <div style={{ fontWeight: '700', fontSize: '0.95rem', color: 'var(--tx-1)' }}>{c.labelAr}</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--tx-3)' }}>{c.desc}</div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <button
+                    onClick={() => updateCombo(c.key, -1)}
+                    style={{
+                      width: '32px', height: '32px', borderRadius: 'var(--r-sm)',
+                      border: '1px solid var(--border-strong)', background: 'var(--bg-elevated)',
+                      color: 'var(--tx-1)', fontWeight: '800', fontSize: '1rem', cursor: 'pointer'
+                    }}
+                  >−</button>
+                  <span style={{ fontWeight: '800', minWidth: '24px', textAlign: 'center', fontFamily: 'var(--font-mono)' }}>
+                    {split[c.key]}
+                  </span>
+                  <button
+                    onClick={() => updateCombo(c.key, 1)}
+                    style={{
+                      width: '32px', height: '32px', borderRadius: 'var(--r-sm)',
+                      border: '1px solid var(--border-strong)', background: 'var(--bg-elevated)',
+                      color: 'var(--tx-1)', fontWeight: '800', fontSize: '1rem', cursor: 'pointer'
+                    }}
+                  >+</button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{ textAlign: 'center', fontSize: '0.85rem', color: 'var(--tx-3)', fontWeight: '600', marginTop: '4px' }}>
+            Total items: {total} • Total price: {totalPrice.toFixed(1)}ج
           </div>
         </div>
 
-        <div style={{ marginTop: 'var(--sp-4)' }}>
-          <Button size="lg" onClick={() => onConfirm(false)} style={{ width: '100%' }}>
+        <div style={{ marginTop: 'var(--sp-2)' }}>
+          <Button size="lg" onClick={handleConfirm} disabled={total === 0} style={{ width: '100%' }}>
             Confirm & Add to Cart
           </Button>
           <Button variant="ghost" size="sm" onClick={() => onConfirm(true)} style={{ width: '100%', marginTop: 'var(--sp-2)' }}>

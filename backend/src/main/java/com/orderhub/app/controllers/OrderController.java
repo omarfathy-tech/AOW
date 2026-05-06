@@ -3,6 +3,7 @@ package com.orderhub.app.controllers;
 import com.orderhub.app.models.Order;
 import com.orderhub.app.models.OrderStatus;
 import com.orderhub.app.repositories.OrderRepository;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -19,7 +20,7 @@ import java.util.Optional;
 @RestController
 @RequestMapping("/api/orders")
 @CrossOrigin(origins = "*")
-@lombok.extern.slf4j.Slf4j
+@Slf4j
 public class OrderController {
 
     @Autowired
@@ -35,7 +36,7 @@ public class OrderController {
 
     @PostMapping
     public Order createOrder(@RequestBody Order order) {
-        long threadId = Thread.currentThread().threadId();
+        long threadId = Thread.currentThread().getId();
         long start = System.currentTimeMillis();
         log.info("[Thread-{}] INCOMING: Creating order for user {} in session {}", 
             threadId,
@@ -60,7 +61,7 @@ public class OrderController {
 
     @GetMapping("/restaurant/{restaurantId}")
     public Page<Order> getOrdersByRestaurant(
-            @PathVariable String restaurantId,
+            @PathVariable Long restaurantId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "10") int size) {
         Pageable pageable = PageRequest.of(page, size, Sort.by("id").descending());

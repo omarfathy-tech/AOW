@@ -36,6 +36,9 @@ public class User {
 
     private String color;
 
+    @Column(name = "avatar_url", length = 500)
+    private String avatarUrl;
+
     @Column(name = "language_pref", length = 10)
     @Builder.Default
     private String languagePref = "ar";

@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import MenuPanel from './MenuPanel';
 import ItemExtrasModal from './ItemExtrasModal';
+import ChatOrder from './ChatOrder';
 import { ITEM_EXTRA_OPTIONS } from '../constants';
 import { API, getAuthHeaders } from '../api.js';
 import Button from './common/Button';
@@ -69,7 +70,6 @@ export default function UserPortal({ user, restaurant, onBack }) {
   const [favorites, setFavorites] = useState([]);
   
   const [pendingItem, setPendingItem] = useState(null);
-  const [pendingExtraChoice, setPendingExtraChoice] = useState({ salad: false, tahina: false });
   const [isCartOpen, setIsCartOpen] = useState(false);
   const showToast = useToast();
 
@@ -94,7 +94,8 @@ export default function UserPortal({ user, restaurant, onBack }) {
       setActiveSession(s);
       setSessionStatus(s.status);
       const myOrder = s.personOrders?.find(p => p.name === user.username);
-      if (myOrder) setOrderSubmitted(true);
+      if (myOrder && (myOrder.items?.length > 0 || myOrder.textOrder)) setOrderSubmitted(true);
+      else setOrderSubmitted(false);
     } else {
       setActiveSession(null);
       setSessionStatus("NONE");
@@ -116,7 +117,7 @@ export default function UserPortal({ user, restaurant, onBack }) {
 
   const cats = Object.keys(menu.categories);
   const menuItems = menu.categories[currentCat] || [];
-  const subtotal = useMemo(() => myItems.reduce((acc, item) => acc + item.price, 0), [myItems]);
+  const subtotal = useMemo(() => myItems.reduce((acc, item) => acc + item.price * (item.quantity || 1), 0), [myItems]);
 
   function getOptionLabel(optionId) {
     return ITEM_EXTRA_OPTIONS.find(o => o.id === optionId)?.label || "عادي";
@@ -173,27 +174,31 @@ export default function UserPortal({ user, restaurant, onBack }) {
 
   function openItemExtras(itemName, size, price) {
     setPendingItem({ itemName, size, price });
-    setPendingExtraChoice({ salad: false, tahina: false });
   }
 
-  function confirmItemWithExtra(forceDefault = false) {
-    if (!pendingItem) return;
-    const { salad, tahina } = pendingExtraChoice;
-    let optionId = "none";
-    if (!forceDefault) {
-      if (salad && tahina) optionId = "both";
-      else if (salad) optionId = "salad";
-      else if (tahina) optionId = "tahina";
+  function confirmItemWithExtra(cancelled = false, combos = []) {
+    if (cancelled || !pendingItem) {
+      setPendingItem(null);
+      return;
     }
-    setMyItems(items => [...items, {
-      id: Date.now() + Math.random(),
-      itemName: pendingItem.itemName,
-      size: pendingItem.size,
-      price: pendingItem.price,
-      optionId,
-      isExtra: false
-    }]);
-    showToast(`${pendingItem.itemName} added to cart`, 'success');
+    const newItems = [];
+    combos.forEach(({ optionId, qty }) => {
+      for (let i = 0; i < qty; i++) {
+        newItems.push({
+          id: Date.now() + Math.random() + i,
+          itemName: pendingItem.itemName,
+          size: pendingItem.size,
+          price: pendingItem.price,
+          optionId,
+          isExtra: false,
+          quantity: 1
+        });
+      }
+    });
+    if (newItems.length === 0) return;
+    setMyItems(items => [...items, ...newItems]);
+    const totalQty = combos.reduce((sum, c) => sum + c.qty, 0);
+    showToast(`${totalQty}× ${pendingItem.itemName} added to cart`, 'success');
     setPendingItem(null);
   }
 
@@ -205,7 +210,8 @@ export default function UserPortal({ user, restaurant, onBack }) {
         name: item.itemName,
         price: item.price,
         size: item.size || "-",
-        option: item.isExtra ? "إضافة" : getOptionLabel(item.optionId)
+        option: item.isExtra ? "إضافة" : getOptionLabel(item.optionId),
+        quantity: item.quantity || 1
       })),
       subtotal,
       notes: orderNotes || null
@@ -221,13 +227,51 @@ export default function UserPortal({ user, restaurant, onBack }) {
         setMyItems([]);
         setOrderNotes("");
         setIsCartOpen(false);
-        showToast("Order submitted successfully!", "success");
+        showToast(orderSubmitted ? "Order updated successfully!" : "Order submitted successfully!", "success");
+        // Send WhatsApp receipt if user has phone
+        if (user?.phone) {
+          const lines = [
+            `🧺 Your Order — ${restaurant.name}`,
+            `━━━━━━━━━━━━━━━`,
+            ...payload.items.map(i => `• ${i.quantity > 1 ? i.quantity + '× ' : ''}${i.name} ${i.size !== '-' ? '(' + i.size + ')' : ''}${i.option && i.option !== 'عادي' ? ' — ' + i.option : ''} — ${i.price}ج`),
+            ``,
+            `Subtotal: ${subtotal.toFixed(1)}ج`,
+            `Delivery share: ${(restaurant.deliveryFee / (activeSession?.personOrders?.length || 1)).toFixed(1)}ج`,
+            `*Total: ${(subtotal + (restaurant.deliveryFee / (activeSession?.personOrders?.length || 1))).toFixed(1)}ج*`
+          ];
+          const phone = user.phone.replace(/\+/g, '');
+          const url = `https://wa.me/${phone}?text=${encodeURIComponent(lines.join('\n'))}`;
+          window.open(url, '_blank');
+        }
       } else {
         showToast("Failed to submit order", "error");
       }
     } catch (err) { 
       showToast("Network error submitting order", "error");
     }
+  }
+
+  function handleAddMoreItems() {
+    const myOrder = activeSession?.personOrders?.find(p => p.name === user.username);
+    if (!myOrder) return;
+    setMyItems(myOrder.items.map((i, idx) => ({
+      id: Date.now() + idx + Math.random(),
+      itemName: i.name,
+      size: i.size,
+      price: i.price,
+      optionId: ITEM_EXTRA_OPTIONS.find(o => o.label === i.option)?.id || "none",
+      isExtra: i.option === "إضافة",
+      quantity: i.quantity || 1
+    })));
+    setOrderNotes(myOrder.notes || "");
+  }
+
+  function updateQuantity(itemId, delta) {
+    setMyItems(items => items.map(item => {
+      if (item.id !== itemId) return item;
+      const newQty = Math.max(1, (item.quantity || 1) + delta);
+      return { ...item, quantity: newQty };
+    }));
   }
 
   async function handleClearOrder() {
@@ -252,7 +296,7 @@ export default function UserPortal({ user, restaurant, onBack }) {
     }
   }
 
-  const canOrder = sessionStatus === "OPEN" && !orderSubmitted;
+  const canOrder = sessionStatus === "OPEN";
 
   return (
     <div className="user-portal" style={{ 
@@ -311,10 +355,13 @@ export default function UserPortal({ user, restaurant, onBack }) {
              <p style={{ color: 'var(--tx-2)', fontSize: '0.95rem', fontWeight: '500' }}>
                {sessionStatus === "SENT" ? "Your order was successfully sent to the restaurant." : "Sit tight! We'll notify you once it's on the way."}
              </p>
-             <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', marginTop: '24px' }}>
+             <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', marginTop: '24px', flexWrap: 'wrap' }}>
                 <Button size="sm" variant="secondary" onClick={handleSaveFavorite}>🧡 Save This Order</Button>
                 {sessionStatus === "OPEN" && (
-                  <Button size="sm" variant="ghost" onClick={handleClearOrder} style={{ borderColor: 'var(--red)', color: 'var(--red)' }}>Change Order</Button>
+                  <>
+                    <Button size="sm" variant="ghost" onClick={handleAddMoreItems} style={{ borderColor: 'var(--gold)', color: 'var(--gold)' }}>➕ Add More Items</Button>
+                    <Button size="sm" variant="ghost" onClick={handleClearOrder} style={{ borderColor: 'var(--red)', color: 'var(--red)' }}>🗑 Clear Order</Button>
+                  </>
                 )}
              </div>
 
@@ -381,33 +428,40 @@ export default function UserPortal({ user, restaurant, onBack }) {
           </div>
         )}
         
-        <div style={{ opacity: canOrder ? 1 : 0.6, pointerEvents: canOrder ? 'auto' : 'none' }}>
-          <MenuPanel 
-            activePerson={user.username}
-            cats={cats}
-            currentCat={currentCat}
-            setCurrentCat={setCurrentCat}
-            menuItems={menuItems}
-            onOpenItemExtras={openItemExtras}
-            onToggleExtra={(extra) => {
-              const existing = myItems.find(i => i.isExtra && i.itemName === extra.nameAr);
-              if (existing) setMyItems(items => items.filter(x => x.id !== existing.id));
-              else setMyItems(items => [...items, { id: Math.random(), itemName: extra.nameAr, price: extra.price, isExtra: true }]);
-            }}
-            isExtraSelected={(name) => myItems.some(i => i.isExtra && i.itemName === name)}
+        {restaurant.orderMode === 'TEXT' ? (
+          <ChatOrder
+            user={user}
+            activeSession={activeSession}
+            sessionStatus={sessionStatus}
           />
-        </div>
-
-        <ItemExtrasModal 
-          pendingItem={pendingItem}
-          pendingExtraChoice={pendingExtraChoice}
-          setPendingExtraChoice={setPendingExtraChoice}
-          onConfirm={confirmItemWithExtra}
-        />
+        ) : (
+          <>
+            <div style={{ opacity: canOrder ? 1 : 0.6, pointerEvents: canOrder ? 'auto' : 'none' }}>
+              <MenuPanel
+                activePerson={user.username}
+                cats={cats}
+                currentCat={currentCat}
+                setCurrentCat={setCurrentCat}
+                menuItems={menuItems}
+                onOpenItemExtras={openItemExtras}
+                onToggleExtra={(extra) => {
+                  const existing = myItems.find(i => i.isExtra && i.itemName === extra.nameAr);
+                  if (existing) setMyItems(items => items.filter(x => x.id !== existing.id));
+                  else setMyItems(items => [...items, { id: Math.random(), itemName: extra.nameAr, price: extra.price, isExtra: true, quantity: 1 }]);
+                }}
+                isExtraSelected={(name) => myItems.some(i => i.isExtra && i.itemName === name)}
+              />
+            </div>
+            <ItemExtrasModal
+              pendingItem={pendingItem}
+              onConfirm={confirmItemWithExtra}
+            />
+          </>
+        )}
       </main>
 
       {/* Floating Cart Button (Mobile) */}
-      {myItems.length > 0 && !orderSubmitted && (
+      {myItems.length > 0 && (
         <div style={{
           position: 'fixed',
           bottom: 'var(--sp-4)',
@@ -451,16 +505,29 @@ export default function UserPortal({ user, restaurant, onBack }) {
               borderRadius: 'var(--r-md)',
               display: 'flex', 
               justifyContent: 'space-between', 
-              alignItems: 'center' 
+              alignItems: 'center',
+              gap: '12px'
             }}>
-              <div>
+              <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontWeight: '700' }}>{item.itemName}</div>
                 <div style={{ fontSize: '0.75rem', color: 'var(--tx-3)' }}>
                   {item.isExtra ? "Extra Side" : `${item.size} • ${getOptionLabel(item.optionId)}`}
                 </div>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                <span style={{ fontWeight: '800' }}>{item.price}ج</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}>
+                {/* Quantity Stepper */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--bg-base)', borderRadius: 'var(--r-md)', padding: '4px', border: '1px solid var(--border-default)' }}>
+                  <button 
+                    onClick={() => updateQuantity(item.id, -1)}
+                    style={{ background: 'var(--bg-elevated)', border: 'none', color: 'var(--tx-1)', width: '28px', height: '28px', borderRadius: 'var(--r-sm)', cursor: 'pointer', fontWeight: '800', fontSize: '1rem' }}
+                  >−</button>
+                  <span style={{ fontWeight: '800', color: 'var(--tx-1)', minWidth: '24px', textAlign: 'center', fontSize: '0.9rem' }}>{item.quantity || 1}</span>
+                  <button 
+                    onClick={() => updateQuantity(item.id, 1)}
+                    style={{ background: 'var(--bg-elevated)', border: 'none', color: 'var(--tx-1)', width: '28px', height: '28px', borderRadius: 'var(--r-sm)', cursor: 'pointer', fontWeight: '800', fontSize: '1rem' }}
+                  >+</button>
+                </div>
+                <span style={{ fontWeight: '800', minWidth: '50px', textAlign: 'right' }}>{(item.price * (item.quantity || 1)).toFixed(1)}ج</span>
                 <button 
                   onClick={() => setMyItems(items => items.filter(x => x.id !== item.id))} 
                   style={{ background: 'var(--red-dim)', border: 'none', color: 'var(--red)', width: '28px', height: '28px', borderRadius: '50%', cursor: 'pointer' }}
@@ -486,17 +553,43 @@ export default function UserPortal({ user, restaurant, onBack }) {
             flexDirection: 'column',
             gap: '16px'
           }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ color: 'var(--tx-2)' }}>Total to pay</span>
-              <span style={{ fontSize: '1.75rem', fontWeight: '800', fontFamily: 'var(--font-display)' }}>{subtotal}ج</span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ color: 'var(--tx-2)', fontSize: '0.9rem' }}>Items Subtotal</span>
+                <span style={{ fontWeight: '700', color: 'var(--tx-1)' }}>{subtotal.toFixed(1)}ج</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ color: 'var(--tx-2)', fontSize: '0.9rem' }}>
+                  Estimated Delivery Share
+                  <span style={{ color: 'var(--tx-3)', fontSize: '0.75rem', marginLeft: '6px' }}>
+                    ({activeSession?.personOrders?.length || 1} participant{activeSession?.personOrders?.length !== 1 ? 's' : ''})
+                  </span>
+                </span>
+                <span style={{ fontWeight: '700', color: 'var(--tx-1)' }}>
+                  {(restaurant.deliveryFee / (activeSession?.personOrders?.length || 1)).toFixed(1)}ج
+                </span>
+              </div>
+              <div style={{ 
+                display: 'flex', 
+                justifyContent: 'space-between', 
+                alignItems: 'center',
+                paddingTop: '10px',
+                borderTop: '1px dashed var(--border-default)'
+              }}>
+                <span style={{ color: 'var(--tx-2)', fontWeight: '700' }}>Estimated Total</span>
+                <span style={{ fontSize: '1.5rem', fontWeight: '800', fontFamily: 'var(--font-display)', color: 'var(--gold)' }}>
+                  {(subtotal + (restaurant.deliveryFee / (activeSession?.personOrders?.length || 1))).toFixed(1)}ج
+                </span>
+              </div>
             </div>
             <Button 
               size="lg" 
               onClick={handleSubmitOrder}
               disabled={!canOrder}
+              className="btn-gradient"
               style={{ width: '100%' }}
             >
-              {sessionStatus === "OPEN" ? "Place My Order" : "Ordering Closed"}
+              {!canOrder ? "Ordering Closed" : orderSubmitted ? "Update My Order" : "Place My Order"}
             </Button>
           </div>
         </div>

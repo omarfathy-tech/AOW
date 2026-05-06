@@ -5,11 +5,9 @@ import com.orderhub.app.models.PersonOrder;
 import com.orderhub.app.repositories.OrderSessionRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.data.mongodb.core.query.Criteria;
-import org.springframework.data.mongodb.core.query.Query;
-import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -25,13 +23,8 @@ public class SessionController {
     @Autowired
     private OrderSessionRepository sessionRepository;
 
-    // Inject MongoTemplate for atomic updates — avoids the save() insert/update confusion
-    @Autowired
-    private MongoTemplate mongoTemplate;
-
     @GetMapping("/active")
     public List<OrderSession> getActiveSessions() {
-        // Active means the admin is still working on it (OPEN or CLOSED)
         return sessionRepository.findByStatusIn(List.of("OPEN", "CLOSED"));
     }
 
@@ -49,7 +42,6 @@ public class SessionController {
             ));
         }
 
-        // Check for recently SENT session
         List<OrderSession> sent = sessionRepository.findByStatus("SENT");
         Optional<OrderSession> recentSent = sent.stream()
             .filter(s -> s.getSentAt() != null)
@@ -74,20 +66,8 @@ public class SessionController {
             .orElse(ResponseEntity.notFound().build());
     }
 
-    /**
-     * Add or replace a person's order in a session.
-     *
-     * THE CORE FIX: Instead of fetching the full document, mutating it, then
-     * calling save() — which Spring Data may misidentify as a new insert when
-     * the @Version field is involved — we use MongoTemplate to:
-     *   1. Pull any existing order for this person atomically.
-     *   2. Push the new order atomically.
-     *   3. Recalculate and set the total atomically.
-     *
-     * This is a single round-trip with no optimistic locking conflicts and
-     * no risk of DuplicateKeyException.
-     */
     @PostMapping("/{id}/order")
+    @Transactional
     public ResponseEntity<?> addOrUpdatePersonOrder(
             @PathVariable String id,
             @RequestBody PersonOrder personOrder) {
@@ -108,98 +88,119 @@ public class SessionController {
             personOrder.setStatus("PENDING");
         }
 
-        Query query = Query.query(Criteria.where("_id").is(id));
+        // JPA Logic: Remove existing order for same person, then add new one
+        session.getPersonOrders().removeIf(p -> p.getName().equals(personOrder.getName()));
+        
+        personOrder.setSession(session);
+        session.getPersonOrders().add(personOrder);
 
-        // Step 1: atomically remove any existing order for this person
-        Update pullUpdate = new Update().pull("personOrders",
-            org.springframework.data.mongodb.core.query.Query.query(
-                Criteria.where("name").is(personOrder.getName())
-            )
-        );
-        mongoTemplate.updateFirst(query, pullUpdate, OrderSession.class);
-
-        // Step 2: atomically push the new order
-        Update pushUpdate = new Update().push("personOrders", personOrder);
-        mongoTemplate.updateFirst(query, pushUpdate, OrderSession.class);
-
-        // Step 3: recalculate total — re-fetch after mutations
-        OrderSession updated = mongoTemplate.findOne(query, OrderSession.class);
-        if (updated == null) {
-            return ResponseEntity.notFound().build();
-        }
-
-        double newTotal = updated.getDeliveryFee();
-        for (PersonOrder p : updated.getPersonOrders()) {
+        // Recalculate total
+        double newTotal = session.getDeliveryFee();
+        for (PersonOrder p : session.getPersonOrders()) {
             newTotal += p.getSubtotal();
         }
+        session.setTotal(newTotal);
 
-        Update totalUpdate = new Update().set("total", newTotal);
-        mongoTemplate.updateFirst(query, totalUpdate, OrderSession.class);
-
-        // Re-fetch the final state to return to the client
-        OrderSession finalSession = mongoTemplate.findOne(query, OrderSession.class);
+        OrderSession finalSession = sessionRepository.save(session);
         log.info("Order saved for person '{}' in session '{}'.", personOrder.getName(), id);
         return ResponseEntity.ok(finalSession);
     }
 
     @DeleteMapping("/{id}/order/{name}")
+    @Transactional
     public ResponseEntity<?> removePersonOrder(
             @PathVariable String id,
             @PathVariable String name) {
 
-        if (!sessionRepository.existsById(id)) {
+        Optional<OrderSession> optSession = sessionRepository.findById(id);
+        if (optSession.isEmpty()) {
             return ResponseEntity.notFound().build();
         }
 
-        Query query = Query.query(Criteria.where("_id").is(id));
-
-        // Atomically pull the person's order
-        Update pullUpdate = new Update().pull("personOrders",
-            Query.query(Criteria.where("name").is(name))
-        );
-        mongoTemplate.updateFirst(query, pullUpdate, OrderSession.class);
+        OrderSession session = optSession.get();
+        session.getPersonOrders().removeIf(p -> p.getName().equals(name));
 
         // Recalculate total
-        OrderSession updated = mongoTemplate.findOne(query, OrderSession.class);
-        if (updated == null) {
-            return ResponseEntity.notFound().build();
-        }
-
-        double newTotal = updated.getDeliveryFee();
-        for (PersonOrder p : updated.getPersonOrders()) {
+        double newTotal = session.getDeliveryFee();
+        for (PersonOrder p : session.getPersonOrders()) {
             newTotal += p.getSubtotal();
         }
+        session.setTotal(newTotal);
 
-        Update totalUpdate = new Update().set("total", newTotal);
-        mongoTemplate.updateFirst(query, totalUpdate, OrderSession.class);
-
-        OrderSession finalSession = mongoTemplate.findOne(query, OrderSession.class);
+        OrderSession finalSession = sessionRepository.save(session);
         log.info("Removed order for '{}' from session '{}'.", name, id);
         return ResponseEntity.ok(finalSession);
     }
 
-    /**
-     * Allows a regular user to declare how they paid or will pay.
-     */
     @PatchMapping("/{id}/payment")
+    @Transactional
     public ResponseEntity<?> declarePaymentMethod(
             @PathVariable String id,
             @RequestBody Map<String, String> request) {
 
-        String username = org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication().getName();
+        String username = SecurityContextHolder.getContext().getAuthentication().getName();
         String method = request.get("paymentMethod");
 
-        Query query = Query.query(Criteria.where("_id").is(id).and("personOrders.name").is(username));
-        Update update = new Update();
-        
-        if (method != null) {
-            update.set("personOrders.$.paymentMethod", method);
-            // Optional: If they clicked Vodafone/Instapay links, they are essentially declaring they paid.
-            // We'll leave it up to the admin to tick the 'isPaid' box to confirm it, but the method is set.
+        Optional<OrderSession> optSession = sessionRepository.findById(id);
+        if (optSession.isEmpty()) return ResponseEntity.notFound().build();
+
+        OrderSession session = optSession.get();
+        session.getPersonOrders().stream()
+                .filter(p -> p.getName().equals(username))
+                .findFirst()
+                .ifPresent(p -> p.setPaymentMethod(method));
+
+        OrderSession updatedSession = sessionRepository.save(session);
+        return ResponseEntity.ok(updatedSession);
+    }
+
+    // ── Text-based order endpoints (for restaurants with orderMode=TEXT) ──
+
+    @PostMapping("/{id}/text-order")
+    @Transactional
+    public ResponseEntity<?> addOrUpdateTextOrder(
+            @PathVariable String id,
+            @RequestBody Map<String, String> request) {
+
+        String username = SecurityContextHolder.getContext().getAuthentication().getName();
+        String text = request.get("text");
+
+        Optional<OrderSession> optSession = sessionRepository.findById(id);
+        if (optSession.isEmpty()) return ResponseEntity.notFound().build();
+
+        OrderSession session = optSession.get();
+        if ("CLOSED".equals(session.getStatus()) || "SENT".equals(session.getStatus())) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Session is not open for new orders"));
         }
 
-        mongoTemplate.updateFirst(query, update, OrderSession.class);
-        OrderSession updatedSession = mongoTemplate.findOne(Query.query(Criteria.where("_id").is(id)), OrderSession.class);
-        return ResponseEntity.ok(updatedSession);
+        session.getPersonOrders().removeIf(p -> p.getName().equals(username));
+
+        PersonOrder po = new PersonOrder();
+        po.setName(username);
+        po.setTextOrder(text);
+        po.setSubtotal(0);
+        po.setItems(List.of());
+        po.setSession(session);
+        session.getPersonOrders().add(po);
+
+        OrderSession finalSession = sessionRepository.save(session);
+        log.info("Text order saved for '{}' in session '{}'.", username, id);
+        return ResponseEntity.ok(finalSession);
+    }
+
+    @DeleteMapping("/{id}/text-order")
+    @Transactional
+    public ResponseEntity<?> removeTextOrder(@PathVariable String id) {
+        String username = SecurityContextHolder.getContext().getAuthentication().getName();
+
+        Optional<OrderSession> optSession = sessionRepository.findById(id);
+        if (optSession.isEmpty()) return ResponseEntity.notFound().build();
+
+        OrderSession session = optSession.get();
+        session.getPersonOrders().removeIf(p -> p.getName().equals(username) && p.getTextOrder() != null);
+
+        OrderSession finalSession = sessionRepository.save(session);
+        log.info("Removed text order for '{}' from session '{}'.", username, id);
+        return ResponseEntity.ok(finalSession);
     }
 }

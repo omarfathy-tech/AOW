@@ -16,7 +16,7 @@ public class MenuController {
     private RestaurantRepository restaurantRepository;
 
     @GetMapping("/{restaurantId}")
-    public Map<String, Object> getMenu(@PathVariable String restaurantId) {
+    public Map<String, Object> getMenu(@PathVariable Long restaurantId) {
         Optional<Restaurant> restaurantOpt = restaurantRepository.findById(restaurantId);
         
         Map<String, Object> response = new HashMap<>();
