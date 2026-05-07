@@ -95,18 +95,35 @@ public class RestaurantController {
 
     @PutMapping("/{id}")
     public Restaurant updateRestaurant(@PathVariable Long id, @RequestBody Restaurant restaurant) {
-        restaurant.setId(id);
+        Restaurant existing = restaurantRepository.findById(id).orElseThrow();
+        
+        // Update metadata
+        existing.setName(restaurant.getName());
+        existing.setLogoUrl(restaurant.getLogoUrl());
+        existing.setCuisineType(restaurant.getCuisineType());
+        existing.setDescription(restaurant.getDescription());
+        existing.setDeliveryFee(restaurant.getDeliveryFee());
+        existing.setPhone(restaurant.getPhone());
+        existing.setOwnerUserId(restaurant.getOwnerUserId());
+        existing.setAvailable(restaurant.getAvailable());
+        existing.setOrderMode(restaurant.getOrderMode());
+        existing.setMenuUrl(restaurant.getMenuUrl());
+
+        // Only update categories if provided
         if (restaurant.getCategories() != null) {
+            existing.getCategories().clear();
             for (MenuCategory category : restaurant.getCategories()) {
-                category.setRestaurant(restaurant);
+                category.setRestaurant(existing);
                 if (category.getItems() != null) {
                     for (MenuItem item : category.getItems()) {
                         item.setCategory(category);
                     }
                 }
+                existing.getCategories().add(category);
             }
         }
-        return restaurantRepository.save(restaurant);
+        
+        return restaurantRepository.save(existing);
     }
 
     @DeleteMapping("/{id}")

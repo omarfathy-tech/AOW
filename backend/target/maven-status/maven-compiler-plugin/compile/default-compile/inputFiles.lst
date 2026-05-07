@@ -1,4 +1,5 @@
 /work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/OrderHubApplication.java
+/work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/config/DataSeeder.java
 /work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/config/WebSocketConfig.java
 /work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/controllers/AdminController.java
 /work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/controllers/AuthController.java

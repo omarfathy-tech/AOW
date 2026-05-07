@@ -50,4 +50,5 @@ com/orderhub/app/repositories/RestaurantRepository.class
 com/orderhub/app/models/JsonConverter.class
 com/orderhub/app/models/Order$OrderBuilder.class
 com/orderhub/app/models/OrderSession.class
+com/orderhub/app/config/DataSeeder.class
 com/orderhub/app/services/ElmenusApiClient$ForbiddenException.class

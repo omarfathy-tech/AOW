@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { SIZES, SIZE_COLORS } from '../constants';
 import { API, getAuthHeaders } from '../api.js';
 import Button from './common/Button';
@@ -52,6 +52,9 @@ export default function AdminPortal({ user }) {
   const [showHistory, setShowHistory] = useState(false);
   const [paidUsers, setPaidUsers] = useState({});
   const [deadlineMinutes, setDeadlineMinutes] = useState(15);
+  const [activityLog, setActivityLog] = useState([]);
+  const prevOrdersRef = useRef([]);
+  const [waSummary, setWaSummary] = useState(null);
   const showToast = useToast();
 
   // ─── Sync dashboardSession from the activeSessions poll ───────────────────
@@ -115,6 +118,30 @@ export default function AdminPortal({ user }) {
     };
   }, [dashboardSession?.id]); // ← only the ID string
 
+  // ─── Activity feed ──────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!dashboardSession) return;
+    const prev = prevOrdersRef.current;
+    const curr = dashboardSession.personOrders || [];
+
+    curr.forEach(p => {
+      const wasHere = prev.find(o => o.name === p.name);
+      if (!wasHere) {
+        setActivityLog(log => [{ time: new Date(), text: `${p.name} joined` }, ...log].slice(0, 20));
+      } else if (JSON.stringify(wasHere.items) !== JSON.stringify(p.items)) {
+        setActivityLog(log => [{ time: new Date(), text: `${p.name} updated their order` }, ...log].slice(0, 20));
+      }
+    });
+
+    prev.forEach(p => {
+      if (!curr.find(o => o.name === p.name)) {
+        setActivityLog(log => [{ time: new Date(), text: `${p.name} was removed` }, ...log].slice(0, 20));
+      }
+    });
+
+    prevOrdersRef.current = curr;
+  }, [dashboardSession]);
+
   // ─── Restaurants ──────────────────────────────────────────────────────────
   useEffect(() => {
     fetch(`${API}/restaurants`, { headers: getAuthHeaders(false) })
@@ -158,6 +185,7 @@ export default function AdminPortal({ user }) {
       const newSession = await res.json();
       refreshSessions();
       setDashboardSession(newSession);
+      setActiveTab('sessions');
       showToast(`Session started for ${restaurant.name}`, 'success');
     } catch (err) {
       console.error(err);
@@ -228,16 +256,8 @@ export default function AdminPortal({ user }) {
     } catch (err) { console.error(err); }
   };
 
-  const handleSendToWhatsApp = async () => {
-    if (!dashboardSession) return;
-
-    if (dashboardSession.status === 'OPEN') {
-      await fetch(`${API}/admin/sessions/${dashboardSession.id}/close`, {
-        method: 'PATCH',
-        headers: getAuthHeaders(false),
-      });
-    }
-
+  const buildWaSummary = () => {
+    if (!dashboardSession) return '';
     const lines = [
       `🍽️ *OrderHub Summary* — ${dashboardSession.sessionName}`,
       '━━━━━━━━━━━━━━━━━━━━━━━━',
@@ -318,11 +338,33 @@ export default function AdminPortal({ user }) {
     lines.push(`• Delivery: ${dashboardSession.deliveryFee}ج (${dlvPP.toFixed(1)}ج/person)`);
     const anyDiscounts = dashboardSession.personOrders.some(p => (p.discountPercent || 0) > 0 || (p.flatDiscountPerUser || 0) > 0);
     if (anyDiscounts) lines.push(`• Per-user discounts applied`);
-    const totalWithCeil = costSplit.reduce((sum, r) => sum + r.grandTotal, 0);
+    const totalWithCeil = dashboardSession.personOrders.reduce((sum, p) => {
+      const pDiscPct = p.discountPercent || 0;
+      const pFlatDisc = p.flatDiscountPerUser || 0;
+      const pBase = p.subtotal + dlvPP;
+      let pAfterPct = pBase;
+      if (pDiscPct > 0) pAfterPct = pBase * (1 - pDiscPct / 100);
+      let pAfterFlat = pAfterPct - pFlatDisc;
+      return sum + Math.max(0, Math.ceil(pAfterFlat));
+    }, 0);
     lines.push(`💵 *Grand Total: ${totalWithCeil}ج*`);
+    return lines.join('\n');
+  };
 
-    const encodedText = encodeURIComponent(lines.join('\n'));
-    // The number requested by the user: +201040458295 (removing +)
+  const handlePreviewSummary = () => {
+    if (!dashboardSession) return;
+    if (dashboardSession.status === 'OPEN') {
+      fetch(`${API}/admin/sessions/${dashboardSession.id}/close`, {
+        method: 'PATCH',
+        headers: getAuthHeaders(false),
+      });
+    }
+    setWaSummary(buildWaSummary());
+  };
+
+  const handleConfirmSend = async () => {
+    if (!dashboardSession || !waSummary) return;
+    const encodedText = encodeURIComponent(waSummary);
     const phone = '201040458295';
     window.open(`whatsapp://send?phone=${phone}&text=${encodedText}`, '_blank');
 
@@ -336,7 +378,6 @@ export default function AdminPortal({ user }) {
       setDashboardSession(updated);
       refreshSessions();
 
-      // Send individual order messages to users
       try {
         const usersRes = await fetch(`${API}/users`, { headers: getAuthHeaders(false) });
         if (usersRes.ok) {
@@ -362,6 +403,7 @@ export default function AdminPortal({ user }) {
     } catch (err) {
       console.error(err);
     }
+    setWaSummary(null);
   };
 
   const handleBulkApprove = async () => {
@@ -381,20 +423,56 @@ export default function AdminPortal({ user }) {
     }
   };
 
+  const handleSetDeadline = async (minutes) => {
+    if (!dashboardSession) return;
+    try {
+      const res = await fetch(`${API}/admin/sessions/${dashboardSession.id}/deadline`, {
+        method: 'PATCH',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ deadlineMinutes: minutes }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const updated = await res.json();
+      setDashboardSession(updated);
+      showToast(`Deadline set to ${minutes} min`, 'success');
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to set deadline', 'error');
+    }
+  };
+
+  const handleApproveOrder = async (orderId) => {
+    if (!dashboardSession || !orderId) return;
+    try {
+      await fetch(`${API}/orders/bulk/status`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ orderIds: [orderId], status: 'ACCEPTED' }),
+      });
+      refreshCurrentSession(dashboardSession.id);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   // ─── Derived state ────────────────────────────────────────────────────────
-  const aggregation = useMemo(() => {
-    if (!dashboardSession) return {};
+  const { aggregation, byExtra } = useMemo(() => {
+    if (!dashboardSession) return { aggregation: {}, byExtra: {} };
     const bySize = {};
+    const extras = {};
     dashboardSession.personOrders.forEach(p => {
       p.items.forEach(i => {
-        if (i.option === 'إضافة') return;
+        if (i.option === 'إضافة') {
+          extras[i.name] = (extras[i.name] || 0) + (i.quantity || 1);
+          return;
+        }
         if (!bySize[i.size]) bySize[i.size] = {};
         const lbl =
           i.option === 'عادي' || !i.option ? i.name : `${i.name} ${i.option}`;
         bySize[i.size][lbl] = (bySize[i.size][lbl] || 0) + 1;
       });
     });
-    return bySize;
+    return { aggregation: bySize, byExtra: extras };
   }, [dashboardSession]);
 
   const costSplit = useMemo(() => {
@@ -451,8 +529,8 @@ export default function AdminPortal({ user }) {
             <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--green)', display: 'inline-block', boxShadow: '0 0 8px var(--green)' }} />
             Active Sessions
           </h3>
-          <Button variant="ghost" size="sm" onClick={() => window.open(window.location.origin + window.location.pathname + '?adminHistory=true', '_blank')} style={{ fontSize: '0.75rem', padding: '4px 10px' }}>
-            📜 View All History
+          <Button variant="ghost" size="sm" onClick={() => { setActiveTab('history'); fetchHistory(); }} style={{ fontSize: '0.75rem', padding: '4px 10px' }}>
+            📜 History
           </Button>
         </div>
         <div
@@ -499,7 +577,7 @@ export default function AdminPortal({ user }) {
                   padding: '2px 6px', 
                   borderRadius: 'var(--r-full)' 
                 }}>
-                  {sess.personOrders?.length || 0}
+                  {sess.personOrders?.length || 0} • {sess.total || 0}ج
                 </span>
               </button>
             );
@@ -542,6 +620,23 @@ export default function AdminPortal({ user }) {
           >
             🏪 Management
           </button>
+          <button
+            onClick={() => { setActiveTab('history'); fetchHistory(); }}
+            style={{
+              padding: '6px 14px',
+              borderRadius: 'var(--r-md)',
+              border: 'none',
+              background: activeTab === 'history' ? 'var(--gold-glow)' : 'transparent',
+              color: activeTab === 'history' ? 'var(--gold)' : 'var(--tx-3)',
+              fontWeight: '700',
+              fontSize: '0.85rem',
+              cursor: 'pointer',
+              transition: 'all var(--dur-base)',
+              fontFamily: 'var(--font-body)',
+            }}
+          >
+            📜 History
+          </button>
         </div>
       </div>
 
@@ -549,6 +644,63 @@ export default function AdminPortal({ user }) {
 
         {activeTab === 'management' ? (
           <RestaurantManager />
+        ) : activeTab === 'history' ? (
+          <>
+            <Card variant="raised" style={{ padding: 'var(--sp-5)' }}>
+              <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.5rem', marginBottom: 'var(--sp-4)', color: 'var(--tx-1)' }}>
+                📜 Session History
+              </h3>
+              {(() => {
+                const last7 = sessionHistory
+                  .filter(s => new Date(s.createdAt) > new Date(Date.now() - 7 * 86400000))
+                  .reduce((acc, s) => {
+                    const day = new Date(s.createdAt).toLocaleDateString('en', { weekday: 'short' });
+                    acc[day] = (acc[day] || 0) + (s.total || 0);
+                    return acc;
+                  }, {});
+                const maxVal = Math.max(...Object.values(last7), 1);
+                return Object.keys(last7).length > 0 ? (
+                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 80, marginBottom: 20 }}>
+                    {Object.entries(last7).map(([day, val]) => (
+                      <div key={day} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                        <div style={{ width: '100%', background: 'var(--gold)', height: `${(val / maxVal) * 60}px`, borderRadius: '4px 4px 0 0', minHeight: 4 }} />
+                        <div style={{ fontSize: '0.65rem', color: 'var(--tx-3)' }}>{day}</div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null;
+              })()}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {sessionHistory.length === 0 ? (
+                  <p style={{ color: 'var(--tx-3)', fontSize: '0.85rem', fontStyle: 'italic' }}>No past sessions found.</p>
+                ) : (
+                  sessionHistory.map(sess => (
+                    <div
+                      key={sess.id}
+                      onClick={() => { setDashboardSession(sess); setPaidUsers({}); setActiveTab('sessions'); }}
+                      style={{
+                        padding: '12px 14px',
+                        background: 'var(--bg-elevated)',
+                        borderRadius: 'var(--r-md)',
+                        border: '1px solid var(--border-subtle)',
+                        cursor: 'pointer',
+                        transition: 'border-color var(--dur-base)',
+                      }}
+                      onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--gold)')}
+                      onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
+                    >
+                      <div style={{ fontWeight: '700', color: 'var(--tx-1)', fontSize: '0.875rem' }}>
+                        {sess.sessionName}
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--tx-3)', marginTop: '3px' }}>
+                        {sess.status} • {sess.personOrders?.length ?? 0} orders • {sess.total}ج
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </Card>
+          </>
         ) : dashboardSession ? (
           <>
             {/* ── Session header ── */}
@@ -570,9 +722,50 @@ export default function AdminPortal({ user }) {
                     <span style={{ color: 'var(--tx-3)', fontSize: '0.85rem', fontWeight: '600' }}>
                       {dashboardSession.personOrders.length} people
                     </span>
+                    {dashboardSession.deadline && isOpen && (
+                      <Countdown deadline={dashboardSession.deadline} />
+                    )}
                   </div>
                 </div>
               </div>
+
+              {/* ── Stat bar ── */}
+              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginTop: '12px', marginBottom: '12px' }}>
+                {(() => {
+                  const subtotal = (dashboardSession.total || 0) - (dashboardSession.deliveryFee || 0);
+                  const paidCount = costSplit.filter(r => r.isPaid).length;
+                  const outstanding = costSplit.filter(r => !r.isPaid).reduce((s, r) => s + r.grandTotal, 0);
+                  return [
+                    { label: 'Orders', value: dashboardSession.personOrders.length, color: 'var(--tx-2)' },
+                    { label: 'Subtotal', value: `${subtotal.toFixed(0)}ج`, color: 'var(--tx-1)' },
+                    { label: 'Paid', value: `${paidCount}/${costSplit.length}`, color: 'var(--green)' },
+                    { label: 'Outstanding', value: `${outstanding.toFixed(0)}ج`, color: outstanding > 0 ? 'var(--red)' : 'var(--green)' },
+                  ].map(chip => (
+                    <div key={chip.label} style={{ background: 'var(--bg-elevated)', padding: '8px 14px', borderRadius: 'var(--r-md)', border: '1px solid var(--border-subtle)' }}>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--tx-3)', fontWeight: 700 }}>{chip.label}</div>
+                      <div style={{ fontSize: '1.1rem', fontWeight: 800, color: chip.color }}>{chip.value}</div>
+                    </div>
+                  ));
+                })()}
+              </div>
+
+              {/* ── Deadline setter ── */}
+              {isOpen && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '12px' }}>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--tx-3)', fontWeight: 700 }}>Deadline:</span>
+                  {[15, 30, 45].map(m => (
+                    <button key={m} onClick={() => handleSetDeadline(m)}
+                      style={{ padding: '4px 10px', borderRadius: 'var(--r-sm)', border: '1px solid var(--border-default)', background: deadlineMinutes === m ? 'var(--gold-glow)' : 'var(--bg-elevated)', color: deadlineMinutes === m ? 'var(--gold)' : 'var(--tx-2)', fontWeight: 700, fontSize: '0.75rem', cursor: 'pointer', fontFamily: 'var(--font-body)' }}>
+                      {m}m
+                    </button>
+                  ))}
+                  <input type="number" min={1} max={180} value={deadlineMinutes}
+                    onChange={e => setDeadlineMinutes(parseInt(e.target.value) || 15)}
+                    style={{ width: '50px', padding: '4px 6px', borderRadius: 'var(--r-sm)', border: '1px solid var(--border-default)', background: 'var(--bg-elevated)', color: 'var(--tx-1)', fontSize: '0.75rem' }}
+                  />
+                  <Button size="xs" onClick={() => handleSetDeadline(deadlineMinutes)}>Set</Button>
+                </div>
+              )}
 
               {isSent && (
                 <div
@@ -606,10 +799,10 @@ export default function AdminPortal({ user }) {
                 )}
                 {dashboardSession.personOrders.length > 0 && (
                   <Button
-                    onClick={handleSendToWhatsApp}
+                    onClick={handlePreviewSummary}
                     style={{ background: isSent ? 'var(--gold)' : 'var(--green)', color: 'white', border: 'none', height: '52px' }}
                   >
-                    {isSent ? 'Resend Summary 🚀' : 'Send Summary 🚀'}
+                    {isSent ? `Resend to ${dashboardSession.personOrders.length} people 🚀` : `Send to ${dashboardSession.personOrders.length} people 🚀`}
                   </Button>
                 )}
                 <Button
@@ -642,13 +835,28 @@ export default function AdminPortal({ user }) {
                   {SIZES.filter(s => aggregation[s]).map(size => (
                     <Card
                       key={size}
-                      style={{ minWidth: '160px', flexShrink: 0, padding: 'var(--sp-4)', background: 'var(--bg-elevated)' }}
+                      style={{
+                        minWidth: '160px',
+                        flexShrink: 0,
+                        padding: 'var(--sp-4)',
+                        background: 'var(--bg-elevated)',
+                        borderLeft: `4px solid ${SIZE_COLORS[size] || 'var(--gold)'}`,
+                        position: 'relative',
+                      }}
                     >
+                      <span style={{
+                        position: 'absolute', top: 8, right: 8,
+                        background: SIZE_COLORS[size] || 'var(--gold)',
+                        color: 'white', borderRadius: 99, fontSize: '0.7rem',
+                        padding: '2px 7px', fontWeight: 800,
+                      }}>
+                        {Object.values(aggregation[size]).reduce((a, b) => a + b, 0)}
+                      </span>
                       <div
                         style={{
                           fontWeight: '800',
                           marginBottom: '8px',
-                          color: 'var(--gold)',
+                          color: SIZE_COLORS[size] || 'var(--gold)',
                           borderBottom: '1px solid var(--border-subtle)',
                           paddingBottom: '6px',
                           fontSize: '0.9rem',
@@ -674,6 +882,28 @@ export default function AdminPortal({ user }) {
                       ))}
                     </Card>
                   ))}
+                  {Object.keys(byExtra).length > 0 && (
+                    <Card style={{
+                      minWidth: '140px', flexShrink: 0, padding: 'var(--sp-4)',
+                      background: 'var(--bg-elevated)', borderLeft: '4px solid var(--green)',
+                    }}>
+                      <div style={{
+                        fontWeight: 800, marginBottom: 8, color: 'var(--green)',
+                        borderBottom: '1px solid var(--border-subtle)', paddingBottom: 6,
+                      }}>
+                        إضافات
+                      </div>
+                      {Object.entries(byExtra).map(([item, count]) => (
+                        <div key={item} style={{
+                          fontSize: '0.825rem', display: 'flex',
+                          justifyContent: 'space-between', gap: 12, marginBottom: 4,
+                        }}>
+                          <span style={{ color: 'var(--tx-2)' }}>{item}</span>
+                          <span style={{ fontWeight: 800, color: 'var(--green)' }}>×{count}</span>
+                        </div>
+                      ))}
+                    </Card>
+                  )}
                 </div>
               </div>
             )}
@@ -724,7 +954,7 @@ export default function AdminPortal({ user }) {
                       variant="flat"
                       style={{
                         padding: 'var(--sp-4)',
-                        borderLeft: `4px solid ${p.status === 'CONFIRMED' ? 'var(--green)' : 'var(--gold)'}`,
+                        borderLeft: `4px solid ${p.status === 'CONFIRMED' ? 'var(--green)' : p.status === 'PENDING' ? 'var(--gold)' : 'var(--border-default)'}`,
                         borderRadius: 0,
                       }}
                     >
@@ -732,6 +962,27 @@ export default function AdminPortal({ user }) {
                         <div style={{ fontWeight: '800', fontSize: '1rem', color: 'var(--tx-1)' }}>{p.name}</div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                           <span style={{ fontWeight: '800', color: 'var(--tx-1)' }}>{p.subtotal}ج</span>
+                          {!isSent && p.status !== 'CONFIRMED' && p.id && (
+                            <button
+                              onClick={() => handleApproveOrder(p.id)}
+                              title={`Approve ${p.name}`}
+                              style={{
+                                background: 'var(--green-dim)',
+                                color: 'var(--green)',
+                                border: 'none',
+                                width: '28px',
+                                height: '28px',
+                                borderRadius: '50%',
+                                cursor: 'pointer',
+                                fontSize: '14px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                              }}
+                            >
+                              ✓
+                            </button>
+                          )}
                           {!isSent && (
                             <button
                               onClick={() => handleEvictUser(p.name)}
@@ -799,7 +1050,9 @@ export default function AdminPortal({ user }) {
                               }}
                             >
                               <span>
-                                {i.option === 'إضافة' ? `+ ${i.name}` : `• ${i.name} (${i.size})`}
+                                {i.option === 'إضافة'
+                                  ? `+ ${i.name}`
+                                  : <span>• {i.name} <span style={{ color: SIZE_COLORS[i.size] || 'var(--tx-2)', fontWeight: 700 }}>({i.size})</span></span>}
                               </span>
                               <span>{i.price}ج</span>
                             </div>
@@ -817,12 +1070,48 @@ export default function AdminPortal({ user }) {
               )}
             </div>
 
+            {/* ── Activity feed ── */}
+            <Card variant="flat" style={{ padding: 'var(--sp-4)' }}>
+              <div style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
+                🟢 Live Activity
+              </div>
+              {activityLog.slice(0, 6).map((e, i) => (
+                <div key={i} style={{ fontSize: '0.825rem', color: 'var(--tx-2)', padding: '4px 0', borderBottom: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'space-between' }}>
+                  <span>{e.text}</span>
+                  <span style={{ color: 'var(--tx-3)', fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>
+                    {e.time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                  </span>
+                </div>
+              ))}
+              {activityLog.length === 0 && (
+                <div style={{ color: 'var(--tx-3)', fontSize: '0.85rem', fontStyle: 'italic' }}>
+                  Waiting for activity...
+                </div>
+              )}
+            </Card>
+
             {/* ── Payment summary ── */}
             {costSplit.length > 0 && (
               <Card variant="raised" style={{ padding: 'var(--sp-5)' }}>
                 <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.25rem', marginBottom: 'var(--sp-4)', color: 'var(--tx-1)' }}>
                   💸 Settlement
                 </h3>
+                {(() => {
+                  const totalOwed = costSplit.reduce((s, r) => s + r.grandTotal, 0);
+                  const totalPaid = costSplit.filter(r => r.isPaid).reduce((s, r) => s + r.grandTotal, 0);
+                  const paidPct = totalOwed > 0 ? (totalPaid / totalOwed) * 100 : 0;
+                  return (
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                        <span style={{ fontWeight: 700, color: 'var(--tx-1)' }}>{totalPaid.toFixed(0)}ج collected</span>
+                        <span style={{ color: 'var(--tx-3)', fontSize: '0.85rem' }}>of {totalOwed.toFixed(0)}ج</span>
+                      </div>
+                      <div style={{ height: 6, background: 'var(--bg-base)', borderRadius: 99, overflow: 'hidden' }}>
+                        <div style={{ width: `${paidPct}%`, height: '100%', background: 'var(--green)', transition: 'width 0.4s', borderRadius: 99 }} />
+                      </div>
+                    </div>
+                  );
+                })()}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
                   {costSplit.map(row => (
                     <div
@@ -924,7 +1213,7 @@ export default function AdminPortal({ user }) {
                   ))}
                   <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 'var(--sp-2)', fontWeight: '800', fontSize: '1.2rem' }}>
                     <span style={{ color: 'var(--tx-1)' }}>Grand Total</span>
-                    <span style={{ color: 'var(--gold)' }}>{costSplit.reduce((sum, r) => sum + r.grandTotal, 0)}ج</span>
+                    <span style={{ color: 'var(--gold)' }}>{costSplit.reduce((sum, r) => sum + r.grandTotal, 0).toFixed(1)}ج</span>
                   </div>
                 </div>
               </Card>
@@ -989,56 +1278,24 @@ export default function AdminPortal({ user }) {
           </div>
         </Card>
 
-        {/* ── Session history ── */}
-        <Card
-          variant="flat"
-          style={{ padding: 'var(--sp-4)', cursor: 'pointer' }}
-          onClick={() => {
-            setShowHistory(h => !h);
-            if (!showHistory) fetchHistory();
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontWeight: '800', color: 'var(--tx-2)', fontSize: '0.9rem' }}>
-              📜 Session History
-            </span>
-            <span style={{ color: 'var(--gold)', fontSize: '0.85rem' }}>
-              {showHistory ? 'Collapse ▲' : 'View Past ▼'}
-            </span>
-          </div>
-
-          {showHistory && (
-            <div style={{ marginTop: 'var(--sp-4)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {sessionHistory.length === 0 ? (
-                <p style={{ color: 'var(--tx-3)', fontSize: '0.85rem', fontStyle: 'italic' }}>No past sessions found.</p>
-              ) : (
-                sessionHistory.map(sess => (
-                  <div
-                    key={sess.id}
-                    onClick={e => { e.stopPropagation(); setDashboardSession(sess); setPaidUsers({}); }}
-                    style={{
-                      padding: '12px 14px',
-                      background: 'var(--bg-elevated)',
-                      borderRadius: 'var(--r-md)',
-                      border: '1px solid var(--border-subtle)',
-                      cursor: 'pointer',
-                      transition: 'border-color var(--dur-base)',
-                    }}
-                    onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--gold)')}
-                    onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
-                  >
-                    <div style={{ fontWeight: '700', color: 'var(--tx-1)', fontSize: '0.875rem' }}>
-                      {sess.sessionName}
-                    </div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--tx-3)', marginTop: '3px' }}>
-                      {sess.status} • {sess.personOrders?.length ?? 0} orders • {sess.total}ج
-                    </div>
-                  </div>
-                ))
-              )}
+        {/* ── WhatsApp preview modal ── */}
+        {waSummary && (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'flex-end', zIndex: 200 }}
+            onClick={() => setWaSummary(null)}>
+            <div onClick={e => e.stopPropagation()}
+              style={{ background: 'var(--bg-surface)', width: '100%', maxHeight: '70vh', overflow: 'auto', borderRadius: '20px 20px 0 0', padding: 'var(--sp-5)' }}>
+              <pre style={{ whiteSpace: 'pre-wrap', fontSize: '0.8rem', color: 'var(--tx-2)', lineHeight: 1.6, marginBottom: 16, fontFamily: 'var(--font-body)' }}>
+                {waSummary}
+              </pre>
+              <div style={{ display: 'flex', gap: 12 }}>
+                <Button variant="ghost" onClick={() => setWaSummary(null)}>Cancel</Button>
+                <Button style={{ background: 'var(--green)', color: 'white', border: 'none' }} onClick={handleConfirmSend}>
+                  Send to WhatsApp ✓
+                </Button>
+              </div>
             </div>
-          )}
-        </Card>
+          </div>
+        )}
         </>
         )}
 
