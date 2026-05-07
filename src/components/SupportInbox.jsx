@@ -3,9 +3,7 @@ import Button from './common/Button';
 
 export default function SupportInbox({ notifications, onBack }) {
   const messages = (notifications || [])
-    .filter(n => n.type === 'ORDER_DETAILS' || n.type === 'RESTAURANT_REACTION' || n.type === 'RESTAURANT_ADDED')
-    .slice()
-    .reverse();
+    .filter(n => n.type === 'ORDER_DETAILS' || n.type === 'RESTAURANT_REACTION' || n.type === 'RESTAURANT_ADDED');
 
   return (
     <div style={{ padding: 'var(--sp-4)', maxWidth: '760px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' }}>

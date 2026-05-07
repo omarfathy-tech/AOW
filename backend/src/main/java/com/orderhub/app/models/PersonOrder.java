@@ -39,7 +39,7 @@ public class PersonOrder {
     private Double amountReceived; // for calculating change on CASH
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "session_id")
+    @JoinColumn(name = "session_id", columnDefinition = "VARCHAR(36)")
     @JsonIgnore
     private OrderSession session;
 }

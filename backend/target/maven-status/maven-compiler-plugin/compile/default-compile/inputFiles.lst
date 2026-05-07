@@ -41,4 +41,5 @@
 /work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/services/ElmenusApiClient.java
 /work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/services/MenuImportService.java
 /work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/services/MenuScraperService.java
+/work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/services/MetaWhatsAppService.java
 /work/projects/personal/AOW/backend/src/main/java/com/orderhub/app/services/OrderWebSocketService.java

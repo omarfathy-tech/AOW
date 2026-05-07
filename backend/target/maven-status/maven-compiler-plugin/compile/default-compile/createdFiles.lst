@@ -4,6 +4,7 @@ com/orderhub/app/security/UserCache$CacheEntry.class
 com/orderhub/app/models/PersonOrder.class
 com/orderhub/app/repositories/MenuCategoryRepository.class
 com/orderhub/app/repositories/OrderLineItemRepository.class
+com/orderhub/app/services/MetaWhatsAppService.class
 com/orderhub/app/scheduler/SessionScheduler.class
 com/orderhub/app/services/MenuImportService.class
 com/orderhub/app/security/JwtUtil.class
@@ -27,6 +28,7 @@ com/orderhub/app/models/OrderStatus.class
 com/orderhub/app/controllers/UserController.class
 com/orderhub/app/security/SecurityConfig.class
 com/orderhub/app/dto/ScrapedMenuDTO.class
+com/orderhub/app/controllers/HealthController.class
 com/orderhub/app/models/User.class
 com/orderhub/app/controllers/MenuAdminController.class
 com/orderhub/app/services/ElmenusApiClient.class
@@ -48,3 +50,4 @@ com/orderhub/app/repositories/RestaurantRepository.class
 com/orderhub/app/models/JsonConverter.class
 com/orderhub/app/models/Order$OrderBuilder.class
 com/orderhub/app/models/OrderSession.class
+com/orderhub/app/services/ElmenusApiClient$ForbiddenException.class

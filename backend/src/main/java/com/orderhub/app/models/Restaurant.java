@@ -21,6 +21,7 @@ public class Restaurant {
     private String cuisineType; // PITZA, BURGER, CHICKEN, PIZZA, OTHER
     private String description;
     private double deliveryFee;
+    private String phone; // Restaurant phone number for calling
     private Long ownerUserId;
     private Boolean available = true;
 

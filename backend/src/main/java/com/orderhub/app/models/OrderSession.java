@@ -19,6 +19,7 @@ public class OrderSession {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
+    @Column(length = 36)
     private String id;
 
     @Column(name = "restaurant_id")

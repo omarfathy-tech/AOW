@@ -289,6 +289,26 @@ body {
   }
 }
 
+/* Notification Dropdown Responsive */
+.notification-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(320px, 92vw);
+  max-height: 420px;
+}
+
+@media (max-width: 600px) {
+  .notification-dropdown {
+    position: fixed !important;
+    top: 60px !important;
+    right: 4vw !important;
+    left: 4vw !important;
+    width: 92vw !important;
+    max-height: 80vh !important;
+  }
+}
+
 /* Status Badges */
 .status-badge {
   padding: 4px 12px;

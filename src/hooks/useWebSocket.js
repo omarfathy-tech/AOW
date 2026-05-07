@@ -11,6 +11,36 @@ export function useWebSocket(userId) {
   const clientRef = useRef(null);
   const subscriptionsRef = useRef([]);
 
+  // Load from localStorage when userId changes
+  useEffect(() => {
+    if (userId) {
+      try {
+        const saved = localStorage.getItem(`notifications_${userId}`);
+        if (saved) {
+          setNotifications(JSON.parse(saved));
+        }
+      } catch (e) {
+        console.error("Failed to load notifications", e);
+      }
+    } else {
+      setNotifications([]);
+    }
+  }, [userId]);
+
+  // Save to localStorage when notifications change
+  useEffect(() => {
+    if (userId && notifications.length > 0) {
+      localStorage.setItem(`notifications_${userId}`, JSON.stringify(notifications));
+    } else if (userId && notifications.length === 0) {
+      // If we genuinely cleared notifications, ensure storage is updated,
+      // but avoid wiping it if it just hasn't loaded yet.
+      const saved = localStorage.getItem(`notifications_${userId}`);
+      if (saved && saved !== '[]') {
+        localStorage.setItem(`notifications_${userId}`, '[]');
+      }
+    }
+  }, [notifications, userId]);
+
   const addNotification = useCallback((notification) => {
     setNotifications((prev) => [
       { ...notification, id: Date.now() + Math.random(), readAt: null },

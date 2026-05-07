@@ -604,12 +604,12 @@ export default function AdminPortal({ user }) {
                     {isOpen ? '🔒 Lock Session' : '🔓 Reopen'}
                   </Button>
                 )}
-                {!isSent && dashboardSession.personOrders.length > 0 && (
+                {dashboardSession.personOrders.length > 0 && (
                   <Button
                     onClick={handleSendToWhatsApp}
-                    style={{ background: 'var(--green)', color: 'white', border: 'none', height: '52px' }}
+                    style={{ background: isSent ? 'var(--gold)' : 'var(--green)', color: 'white', border: 'none', height: '52px' }}
                   >
-                    Send Summary 🚀
+                    {isSent ? 'Resend Summary 🚀' : 'Send Summary 🚀'}
                   </Button>
                 )}
                 <Button

@@ -1,4 +1,4 @@
-# AOW App
+# Nema
 
 A modern React-based order management app for restaurants, featuring intuitive UI for collecting and summarizing customer orders.
 

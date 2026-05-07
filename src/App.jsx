@@ -100,22 +100,20 @@ function NotificationBell({ notifications, unreadCount, onMarkAllRead, onClear, 
       </button>
 
       {open && (
-        <div style={{
-          position: "absolute",
-          top: "calc(100% + 8px)",
-          right: 0,
-          width: "min(320px, 92vw)",
-          maxHeight: "420px",
-          background: "var(--bg-elevated)",
-          border: "1px solid var(--border-strong)",
-          borderRadius: "var(--r-lg)",
-          boxShadow: "var(--shadow-lg)",
-          zIndex: 2000,
-          display: "flex",
-          flexDirection: "column",
-          overflow: "hidden",
-          animation: "slide-down 0.2s cubic-bezier(0.16,1,0.3,1)",
-        }}>
+        <div
+          className="notification-dropdown"
+          style={{
+            background: "var(--bg-elevated)",
+            border: "1px solid var(--border-strong)",
+            borderRadius: "var(--r-lg)",
+            boxShadow: "var(--shadow-lg)",
+            zIndex: 2000,
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+            animation: "slide-down 0.2s cubic-bezier(0.16,1,0.3,1)",
+          }}
+        >
           {/* Header */}
           <div style={{
             padding: "12px 16px",

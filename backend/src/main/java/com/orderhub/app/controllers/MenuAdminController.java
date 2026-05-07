@@ -48,8 +48,18 @@ public class MenuAdminController {
     public ResponseEntity<MenuItem> addItem(@RequestBody Map<String, Object> payload) {
         Long categoryId = Long.valueOf(payload.get("categoryId").toString());
         String name = (String) payload.get("name");
-        @SuppressWarnings("unchecked")
-        Map<String, Double> prices = (Map<String, Double>) payload.get("prices");
+        Map<String, Double> prices = new java.util.HashMap<>();
+        if (payload.containsKey("prices")) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> rawPrices = (Map<String, Object>) payload.get("prices");
+            if (rawPrices != null) {
+                for (Map.Entry<String, Object> entry : rawPrices.entrySet()) {
+                    if (entry.getValue() != null) {
+                        prices.put(entry.getKey(), Double.valueOf(entry.getValue().toString()));
+                    }
+                }
+            }
+        }
 
         Optional<MenuCategory> categoryOpt = menuCategoryRepository.findById(categoryId);
         if (categoryOpt.isEmpty()) {
@@ -107,8 +117,16 @@ public class MenuAdminController {
             item.setName((String) payload.get("name"));
         }
         if (payload.containsKey("prices")) {
+            Map<String, Double> prices = new java.util.HashMap<>();
             @SuppressWarnings("unchecked")
-            Map<String, Double> prices = (Map<String, Double>) payload.get("prices");
+            Map<String, Object> rawPrices = (Map<String, Object>) payload.get("prices");
+            if (rawPrices != null) {
+                for (Map.Entry<String, Object> entry : rawPrices.entrySet()) {
+                    if (entry.getValue() != null) {
+                        prices.put(entry.getKey(), Double.valueOf(entry.getValue().toString()));
+                    }
+                }
+            }
             item.setPrices(prices);
         }
         MenuItem saved = menuItemRepository.save(item);

@@ -31,7 +31,7 @@ public class Order {
     @Column(name = "restaurant_id", nullable = false)
     private Long restaurantId; // MySQL restaurant reference
 
-    @Column(name = "session_id")
+    @Column(name = "session_id", length = 36)
     private String sessionId; // MongoDB session reference
 
     @Enumerated(EnumType.STRING)

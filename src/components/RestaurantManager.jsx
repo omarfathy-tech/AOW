@@ -18,9 +18,9 @@ export default function RestaurantManager() {
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState(null);
   const [editingId, setEditingId] = useState(null);
-  const [form, setForm] = useState({ name: '', cuisineType: 'OTHER', description: '', deliveryFee: 0, logoUrl: '', available: true, orderMode: 'MENU', menuUrl: '' });
-  const [categoryForm, setCategoryForm] = useState({ name: '' });
-  const [itemForm, setItemForm] = useState({ name: '', prices: { Small: 0, Medium: 0, Large: 0 } });
+  const [form, setForm] = useState({ name: '', cuisineType: 'OTHER', description: '', deliveryFee: 0, logoUrl: '', available: true, orderMode: 'MENU', menuUrl: '', phone: '' });
+  const [categoryForms, setCategoryForms] = useState({}); // keyed by restaurant.id
+  const [itemForms, setItemForms] = useState({}); // keyed by category.id
   const [editingCategoryId, setEditingCategoryId] = useState(null);
   const [editingItemId, setEditingItemId] = useState(null);
   const [importUrl, setImportUrl] = useState('');
@@ -61,7 +61,7 @@ export default function RestaurantManager() {
   }
 
   function resetForm() {
-    setForm({ name: '', cuisineType: 'OTHER', description: '', deliveryFee: 0, logoUrl: '', available: true, orderMode: 'MENU', menuUrl: '' });
+    setForm({ name: '', cuisineType: 'OTHER', description: '', deliveryFee: 0, logoUrl: '', available: true, orderMode: 'MENU', menuUrl: '', phone: '' });
     setEditingId(null);
   }
 
@@ -273,6 +273,7 @@ export default function RestaurantManager() {
       available: restaurant.available !== false,
       orderMode: restaurant.orderMode || 'MENU',
       menuUrl: restaurant.menuUrl || '',
+      phone: restaurant.phone || '',
     });
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
@@ -295,16 +296,17 @@ export default function RestaurantManager() {
   }
 
   async function handleAddCategory(restaurantId) {
-    if (!categoryForm.name.trim()) return;
+    const cForm = categoryForms[restaurantId] || { name: '' };
+    if (!cForm.name.trim()) return;
     try {
       const res = await fetch(`${API}/admin/menu/categories`, {
         method: 'POST',
         headers: getAuthHeaders(),
-        body: JSON.stringify({ restaurantId, name: categoryForm.name.trim() })
+        body: JSON.stringify({ restaurantId, name: cForm.name.trim() })
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       showToast('Category added', 'success');
-      setCategoryForm({ name: '' });
+      setCategoryForms(prev => ({ ...prev, [restaurantId]: { name: '' } }));
       fetchRestaurants();
     } catch (err) {
       console.error(err);
@@ -343,21 +345,24 @@ export default function RestaurantManager() {
   }
 
   async function handleAddItem(categoryId) {
-    if (!itemForm.name.trim()) return;
+    const iForm = itemForms[categoryId] || { name: '', prices: {} };
+    if (!iForm.name.trim()) return;
     const prices = {};
-    Object.entries(itemForm.prices).forEach(([size, price]) => {
-      const p = parseFloat(price);
-      if (p > 0) prices[size] = p;
-    });
+    if (iForm.prices) {
+      Object.entries(iForm.prices).forEach(([size, price]) => {
+        const p = parseFloat(price);
+        if (p > 0) prices[size] = p;
+      });
+    }
     try {
       const res = await fetch(`${API}/admin/menu/items`, {
         method: 'POST',
         headers: getAuthHeaders(),
-        body: JSON.stringify({ categoryId, name: itemForm.name.trim(), prices })
+        body: JSON.stringify({ categoryId, name: iForm.name.trim(), prices })
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       showToast('Item added', 'success');
-      setItemForm({ name: '', prices: { Small: 0, Medium: 0, Large: 0 } });
+      setItemForms(prev => ({ ...prev, [categoryId]: { name: '', prices: {} } }));
       fetchRestaurants();
     } catch (err) {
       console.error(err);
@@ -412,6 +417,7 @@ export default function RestaurantManager() {
         </h3>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 'var(--sp-3)' }}>
           <Input label="Name" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Restaurant name" />
+          <Input label="Phone" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="+20 123 456 7890" />
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             <label style={{ fontSize: '0.75rem', fontWeight: '700', color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Cuisine</label>
             <select
@@ -587,6 +593,9 @@ export default function RestaurantManager() {
                           >🔗 Menu</a>
                         </>
                       )}
+                      {restaurant.phone && (
+                        <> • <a href={`tel:${restaurant.phone}`} style={{ color: 'var(--gold)', fontWeight: '700', textDecoration: 'none' }} onClick={e => e.stopPropagation()}>📞 {restaurant.phone}</a></>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -671,20 +680,40 @@ export default function RestaurantManager() {
                         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '4px' }}>
                           <input
                             placeholder="Item name"
-                            value={itemForm.name}
-                            onChange={e => setItemForm(f => ({ ...f, name: e.target.value }))}
+                            value={itemForms[category.id]?.name || ''}
+                            onChange={e => {
+                              const val = e.target.value;
+                              setItemForms(prev => {
+                                const current = prev[category.id] || { name: '', prices: {} };
+                                return { ...prev, [category.id]: { ...current, name: val } };
+                              });
+                            }}
                             style={{ flex: 1, minWidth: '120px', padding: '8px 10px', borderRadius: 'var(--r-sm)', border: '1px solid var(--border-default)', background: 'var(--bg-elevated)', color: 'var(--tx-1)' }}
                           />
-                          {['Small', 'Medium', 'Large'].map(size => (
-                            <input
-                              key={size}
-                              type="number"
-                              placeholder={size}
-                              value={itemForm.prices[size] || ''}
-                              onChange={e => setItemForm(f => ({ ...f, prices: { ...f.prices, [size]: e.target.value } }))}
-                              style={{ width: '70px', padding: '8px 10px', borderRadius: 'var(--r-sm)', border: '1px solid var(--border-default)', background: 'var(--bg-elevated)', color: 'var(--tx-1)' }}
-                            />
-                          ))}
+                          {(() => {
+                            const categorySizes = category.items?.length > 0
+                              ? Array.from(new Set(category.items.flatMap(i => Object.keys(i.prices || {}))))
+                              : ['Small', 'Medium', 'Large'];
+                            return categorySizes.map(size => (
+                              <input
+                                key={size}
+                                type="number"
+                                placeholder={size}
+                                value={itemForms[category.id]?.prices?.[size] || ''}
+                                onChange={e => {
+                                  const val = e.target.value;
+                                  setItemForms(prev => {
+                                    const current = prev[category.id] || { name: '', prices: {} };
+                                    return {
+                                      ...prev,
+                                      [category.id]: { ...current, prices: { ...current.prices, [size]: val } }
+                                    };
+                                  });
+                                }}
+                                style={{ width: '80px', padding: '8px 10px', borderRadius: 'var(--r-sm)', border: '1px solid var(--border-default)', background: 'var(--bg-elevated)', color: 'var(--tx-1)' }}
+                              />
+                            ));
+                          })()}
                           <Button size="sm" onClick={() => handleAddItem(category.id)}>+ Add</Button>
                         </div>
                       </div>
@@ -695,8 +724,11 @@ export default function RestaurantManager() {
                   <div style={{ display: 'flex', gap: '8px' }}>
                     <input
                       placeholder="New category name..."
-                      value={categoryForm.name}
-                      onChange={e => setCategoryForm({ name: e.target.value })}
+                      value={categoryForms[restaurant.id]?.name || ''}
+                      onChange={e => {
+                        const val = e.target.value;
+                        setCategoryForms(prev => ({ ...prev, [restaurant.id]: { name: val } }));
+                      }}
                       style={{ flex: 1, padding: '10px 12px', borderRadius: 'var(--r-sm)', border: '1px solid var(--border-default)', background: 'var(--bg-elevated)', color: 'var(--tx-1)' }}
                       onKeyDown={e => { if (e.key === 'Enter') handleAddCategory(restaurant.id); }}
                     />
@@ -714,10 +746,8 @@ export default function RestaurantManager() {
 
 function EditItemRow({ item, onSave, onCancel }) {
   const [name, setName] = useState(item.name || '');
-  const [prices, setPrices] = useState(() => {
-    const p = item.prices || {};
-    return { Small: p.Small || '', Medium: p.Medium || '', Large: p.Large || '' };
-  });
+  const [prices, setPrices] = useState(item.prices || {});
+  const [newSize, setNewSize] = useState('');
 
   return (
     <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', flex: 1 }}>
@@ -726,17 +756,34 @@ function EditItemRow({ item, onSave, onCancel }) {
         onChange={e => setName(e.target.value)}
         style={{ flex: 1, minWidth: '100px', padding: '6px 10px', borderRadius: 'var(--r-sm)', border: '1px solid var(--gold)', background: 'var(--bg-elevated)', color: 'var(--tx-1)' }}
       />
-      {['Small', 'Medium', 'Large'].map(size => (
-        <input
-          key={size}
-          type="number"
-          placeholder={size}
-          value={prices[size]}
-          onChange={e => setPrices(p => ({ ...p, [size]: e.target.value }))}
-          style={{ width: '60px', padding: '6px 10px', borderRadius: 'var(--r-sm)', border: '1px solid var(--border-default)', background: 'var(--bg-elevated)', color: 'var(--tx-1)' }}
-        />
+      {Object.keys(prices).map(size => (
+        <div key={size} style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+          <span style={{ fontSize: '0.65rem', color: 'var(--tx-3)', whiteSpace: 'nowrap' }}>{size}</span>
+          <input
+            type="number"
+            placeholder={size}
+            value={prices[size]}
+            onChange={e => setPrices(p => ({ ...p, [size]: e.target.value }))}
+            style={{ width: '70px', padding: '6px 10px', borderRadius: 'var(--r-sm)', border: '1px solid var(--border-default)', background: 'var(--bg-elevated)', color: 'var(--tx-1)' }}
+          />
+        </div>
       ))}
-      <button onClick={() => onSave({ name, prices })} style={{ background: 'none', border: 'none', color: 'var(--green)', cursor: 'pointer', fontSize: '0.9rem' }}>✓</button>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+        <input 
+          placeholder="New style..." 
+          value={newSize} 
+          onChange={e => setNewSize(e.target.value)} 
+          style={{ width: '80px', padding: '6px 10px', borderRadius: 'var(--r-sm)', border: '1px solid var(--border-default)', background: 'var(--bg-elevated)', color: 'var(--tx-1)', fontSize: '0.8rem' }}
+        />
+        <button onClick={() => { if(newSize.trim()) { setPrices(p => ({ ...p, [newSize.trim()]: '' })); setNewSize(''); } }} style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-default)', borderRadius: 'var(--r-sm)', padding: '6px 10px', color: 'var(--tx-1)', cursor: 'pointer' }}>+</button>
+      </div>
+      <button onClick={() => {
+        const filteredPrices = {};
+        Object.entries(prices).forEach(([k, v]) => {
+          if (v !== '' && v !== null && !isNaN(parseFloat(v))) filteredPrices[k] = parseFloat(v);
+        });
+        onSave({ name, prices: filteredPrices });
+      }} style={{ background: 'none', border: 'none', color: 'var(--green)', cursor: 'pointer', fontSize: '0.9rem' }}>✓</button>
       <button onClick={onCancel} style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: '0.9rem' }}>✕</button>
     </div>
   );
