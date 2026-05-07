@@ -52,23 +52,30 @@ export default function AdminPortal({ user }) {
   const [showHistory, setShowHistory] = useState(false);
   const [paidUsers, setPaidUsers] = useState({});
   const [deadlineMinutes, setDeadlineMinutes] = useState(15);
+  const [selectedHistorySession, setSelectedHistorySession] = useState(null);
   const [activityLog, setActivityLog] = useState([]);
   const prevOrdersRef = useRef([]);
+  const mutatingRef = useRef(false);
   const [waSummary, setWaSummary] = useState(null);
   const showToast = useToast();
 
-  // ─── Sync dashboardSession from the activeSessions poll ───────────────────
+  // One-time init: pick first active session when list loads
   useEffect(() => {
-    if (activeSessions.length === 0) return;
-    if (dashboardSession) {
-      const updated = activeSessions.find(s => s.id === dashboardSession.id);
-      if (updated) setDashboardSession(updated);
-    } else {
+    if (activeSessions.length > 0 && !dashboardSession) {
       setDashboardSession(activeSessions[0]);
     }
-  }, [activeSessions]); // intentionally omit dashboardSession to avoid loop
+  }, [activeSessions, dashboardSession]);
+  const [paymentOverrides, setPaymentOverrides] = useState({});
 
-  // ─── Per-session detail poller — THE FIX ──────────────────────────────────
+  const normalizeSession = useCallback((s) => ({
+    ...s,
+    personOrders: (s.personOrders || []).map(p => ({
+      ...p,
+      isPaid: p.isPaid ?? p.paid ?? false,
+    }))
+  }), []);
+
+  // ─── Per-session detail poller ──────────────────────────────────
   // Depend only on the session ID string, not the session object or a
   // useCallback wrapper. This prevents setDashboardSession(newObj) from
   // recreating the callback → re-firing the effect → infinite loop.
@@ -88,9 +95,9 @@ export default function AdminPortal({ user }) {
           return res.json();
         })
         .then(data => {
-          if (!isCancelled) {
+          if (!isCancelled && !mutatingRef.current) {
             failures = 0;
-            setDashboardSession(data);
+            setDashboardSession(normalizeSession(data));
           }
         })
         .catch(err => {
@@ -164,7 +171,7 @@ export default function AdminPortal({ user }) {
     if (!sessionId) return;
     fetch(`${API}/sessions/${sessionId}`, { headers: getAuthHeaders(false) })
       .then(res => res.json())
-      .then(data => setDashboardSession(data))
+      .then(data => setDashboardSession(normalizeSession(data)))
       .catch(err => console.error(err));
   }, []);
 
@@ -243,19 +250,50 @@ export default function AdminPortal({ user }) {
     }
   };
 
-  const handleUpdatePayment = async (personName, payload) => {
-    try {
-      const res = await fetch(`${API}/admin/sessions/${dashboardSession.id}/orders/${encodeURIComponent(personName)}/payment`, {
-        method: 'PATCH',
-        headers: getAuthHeaders(),
-        body: JSON.stringify(payload)
-      });
-      if (res.ok) {
-        setDashboardSession(await res.json());
-      }
-    } catch (err) { console.error(err); }
-  };
+const handleUpdatePayment = async (personName, payload) => {
+  if (!dashboardSession) return;
 
+  setPaymentOverrides(prev => ({
+    ...prev,
+    [personName]: { ...(prev[personName] || {}), ...payload }
+  }));
+
+  try {
+    const url = `${API}/admin/sessions/${dashboardSession.id}/orders/${encodeURIComponent(personName)}/payment`;
+    const res = await fetch(url, {
+      method: 'PATCH',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(payload)
+    });
+
+    if (res.ok) {
+      const updated = await res.json();
+      setDashboardSession(normalizeSession(updated));
+      setPaymentOverrides(prev => {
+        const next = { ...prev };
+        delete next[personName];
+        return next;
+      });
+    } else {
+      const errText = await res.text();
+      console.error('Payment update failed:', res.status, errText);
+      setPaymentOverrides(prev => {
+        const next = { ...prev };
+        delete next[personName];
+        return next;
+      });
+      refreshCurrentSession(dashboardSession.id);
+    }
+  } catch (err) {
+    console.error('Payment update exception:', err);
+    setPaymentOverrides(prev => {
+      const next = { ...prev };
+      delete next[personName];
+      return next;
+    });
+    refreshCurrentSession(dashboardSession.id);
+  }
+};
   const buildWaSummary = () => {
     if (!dashboardSession) return '';
     const lines = [
@@ -476,30 +514,30 @@ export default function AdminPortal({ user }) {
   }, [dashboardSession]);
 
   const costSplit = useMemo(() => {
-    if (!dashboardSession || !dashboardSession.personOrders || dashboardSession.personOrders.length === 0) return [];
-    const dlvPP = dashboardSession.deliveryFee / dashboardSession.personOrders.length;
-    return dashboardSession.personOrders.map(p => {
-      const discPct = p.discountPercent || 0;
-      const flatDisc = p.flatDiscountPerUser || 0;
-      const base = p.subtotal + dlvPP;
-      let afterPct = base;
-      if (discPct > 0) afterPct = base * (1 - discPct / 100);
-      let afterFlat = afterPct - flatDisc;
-      const grandTotal = Math.max(0, Math.ceil(afterFlat));
-      return {
-        name: p.name,
-        itemsTotal: p.subtotal,
-        deliveryShare: dlvPP,
-        discountPercent: discPct,
-        flatDiscount: flatDisc,
-        grandTotal,
-        isPaid: p.isPaid || false,
-        paymentMethod: p.paymentMethod || "",
-        amountReceived: p.amountReceived || ""
-      };
-    });
-  }, [dashboardSession]);
-
+  if (!dashboardSession?.personOrders?.length) return [];
+  const dlvPP = dashboardSession.deliveryFee / dashboardSession.personOrders.length;
+  return dashboardSession.personOrders.map(p => {
+    const overrides = paymentOverrides[p.name] || {};   // ← merge overrides
+    const merged = { ...p, ...overrides };
+    const discPct = merged.discountPercent || 0;
+    const flatDisc = merged.flatDiscountPerUser || 0;
+    const base = merged.subtotal + dlvPP;
+    let afterPct = discPct > 0 ? base * (1 - discPct / 100) : base;
+    let afterFlat = afterPct - flatDisc;
+    const grandTotal = Math.max(0, Math.ceil(afterFlat));
+    return {
+      name: merged.name,
+      itemsTotal: merged.subtotal,
+      deliveryShare: dlvPP,
+      discountPercent: discPct,
+      flatDiscount: flatDisc,
+      grandTotal,
+      isPaid: merged.isPaid ?? merged.paid ?? false,
+      paymentMethod: merged.paymentMethod || '',
+      amountReceived: merged.amountReceived || ''
+    };
+  });
+}, [dashboardSession, paymentOverrides]);   // ← add paymentOverrides dep
   const isSent = dashboardSession?.status === 'SENT';
   const isOpen = dashboardSession?.status === 'OPEN';
 
@@ -646,60 +684,94 @@ export default function AdminPortal({ user }) {
           <RestaurantManager />
         ) : activeTab === 'history' ? (
           <>
-            <Card variant="raised" style={{ padding: 'var(--sp-5)' }}>
-              <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.5rem', marginBottom: 'var(--sp-4)', color: 'var(--tx-1)' }}>
-                📜 Session History
-              </h3>
-              {(() => {
-                const last7 = sessionHistory
-                  .filter(s => new Date(s.createdAt) > new Date(Date.now() - 7 * 86400000))
-                  .reduce((acc, s) => {
-                    const day = new Date(s.createdAt).toLocaleDateString('en', { weekday: 'short' });
-                    acc[day] = (acc[day] || 0) + (s.total || 0);
-                    return acc;
-                  }, {});
-                const maxVal = Math.max(...Object.values(last7), 1);
-                return Object.keys(last7).length > 0 ? (
-                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 80, marginBottom: 20 }}>
-                    {Object.entries(last7).map(([day, val]) => (
-                      <div key={day} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
-                        <div style={{ width: '100%', background: 'var(--gold)', height: `${(val / maxVal) * 60}px`, borderRadius: '4px 4px 0 0', minHeight: 4 }} />
-                        <div style={{ fontSize: '0.65rem', color: 'var(--tx-3)' }}>{day}</div>
+            {selectedHistorySession ? (
+              <Card variant="raised" style={{ padding: 'var(--sp-5)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: 'var(--sp-4)' }}>
+                  <Button variant="ghost" size="sm" onClick={() => setSelectedHistorySession(null)}>
+                    ← Back
+                  </Button>
+                  <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.25rem', margin: 0, color: 'var(--tx-1)' }}>
+                    {selectedHistorySession.sessionName}
+                  </h3>
+                  <StatusBadge status={selectedHistorySession.status} />
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--sp-4)' }}>
+                  <div style={{ flex: 1, minWidth: '220px' }}>
+                    <h4 style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: 'var(--tx-3)', fontWeight: 800, letterSpacing: '0.08em', marginBottom: 8 }}>Orders</h4>
+                    {(selectedHistorySession.personOrders || []).map((p, i) => (
+                      <div key={i} style={{ padding: '8px 0', borderBottom: '1px solid var(--border-subtle)', fontSize: '0.85rem' }}>
+                        <span style={{ fontWeight: 700, color: 'var(--tx-1)' }}>{p.name}</span>
+                        <span style={{ color: 'var(--tx-3)', marginLeft: 8 }}>{p.subtotal}ج</span>
+                        {p.textOrder && <div style={{ color: 'var(--tx-2)', marginTop: 4 }}>{p.textOrder}</div>}
                       </div>
                     ))}
                   </div>
-                ) : null;
-              })()}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {sessionHistory.length === 0 ? (
-                  <p style={{ color: 'var(--tx-3)', fontSize: '0.85rem', fontStyle: 'italic' }}>No past sessions found.</p>
-                ) : (
-                  sessionHistory.map(sess => (
-                    <div
-                      key={sess.id}
-                      onClick={() => { setDashboardSession(sess); setPaidUsers({}); setActiveTab('sessions'); }}
-                      style={{
-                        padding: '12px 14px',
-                        background: 'var(--bg-elevated)',
-                        borderRadius: 'var(--r-md)',
-                        border: '1px solid var(--border-subtle)',
-                        cursor: 'pointer',
-                        transition: 'border-color var(--dur-base)',
-                      }}
-                      onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--gold)')}
-                      onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
-                    >
-                      <div style={{ fontWeight: '700', color: 'var(--tx-1)', fontSize: '0.875rem' }}>
-                        {sess.sessionName}
-                      </div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--tx-3)', marginTop: '3px' }}>
-                        {sess.status} • {sess.personOrders?.length ?? 0} orders • {sess.total}ج
-                      </div>
+                  <div style={{ minWidth: '200px' }}>
+                    <h4 style={{ fontSize: '0.75rem', textTransform: 'uppercase', color: 'var(--tx-3)', fontWeight: 800, letterSpacing: '0.08em', marginBottom: 8 }}>Totals</h4>
+                    <div style={{ fontSize: '0.9rem', color: 'var(--tx-2)' }}>
+                      <div>Subtotal: <span style={{ fontWeight: 800, color: 'var(--tx-1)' }}>{(selectedHistorySession.total || 0) - (selectedHistorySession.deliveryFee || 0)}ج</span></div>
+                      <div>Delivery: <span style={{ fontWeight: 800, color: 'var(--tx-1)' }}>{selectedHistorySession.deliveryFee || 0}ج</span></div>
+                      <div style={{ marginTop: 8, fontSize: '1.1rem', fontWeight: 800, color: 'var(--gold)' }}>Total: {selectedHistorySession.total || 0}ج</div>
                     </div>
-                  ))
-                )}
-              </div>
-            </Card>
+                  </div>
+                </div>
+              </Card>
+            ) : (
+              <Card variant="raised" style={{ padding: 'var(--sp-5)' }}>
+                <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.5rem', marginBottom: 'var(--sp-4)', color: 'var(--tx-1)' }}>
+                  📜 Session History
+                </h3>
+                {(() => {
+                  const last7 = sessionHistory
+                    .filter(s => new Date(s.createdAt) > new Date(Date.now() - 7 * 86400000))
+                    .reduce((acc, s) => {
+                      const day = new Date(s.createdAt).toLocaleDateString('en', { weekday: 'short' });
+                      acc[day] = (acc[day] || 0) + (s.total || 0);
+                      return acc;
+                    }, {});
+                  const maxVal = Math.max(...Object.values(last7), 1);
+                  return Object.keys(last7).length > 0 ? (
+                    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 80, marginBottom: 20 }}>
+                      {Object.entries(last7).map(([day, val]) => (
+                        <div key={day} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                          <div style={{ width: '100%', background: 'var(--gold)', height: `${(val / maxVal) * 60}px`, borderRadius: '4px 4px 0 0', minHeight: 4 }} />
+                          <div style={{ fontSize: '0.65rem', color: 'var(--tx-3)' }}>{day}</div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null;
+                })()}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {sessionHistory.length === 0 ? (
+                    <p style={{ color: 'var(--tx-3)', fontSize: '0.85rem', fontStyle: 'italic' }}>No past sessions found.</p>
+                  ) : (
+                    sessionHistory.map(sess => (
+                      <div
+                        key={sess.id}
+                        onClick={() => setSelectedHistorySession(sess)}
+                        style={{
+                          padding: '12px 14px',
+                          background: 'var(--bg-elevated)',
+                          borderRadius: 'var(--r-md)',
+                          border: '1px solid var(--border-subtle)',
+                          cursor: 'pointer',
+                          transition: 'border-color var(--dur-base)',
+                        }}
+                        onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--gold)')}
+                        onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border-subtle)')}
+                      >
+                        <div style={{ fontWeight: '700', color: 'var(--tx-1)', fontSize: '0.875rem' }}>
+                          {sess.sessionName}
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--tx-3)', marginTop: '3px' }}>
+                          {sess.status} • {sess.personOrders?.length ?? 0} orders • {sess.total}ج
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </Card>
+            )}
           </>
         ) : dashboardSession ? (
           <>
@@ -948,126 +1020,170 @@ export default function AdminPortal({ user }) {
                 </div>
               ) : (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '12px' }}>
-                  {dashboardSession.personOrders.map((p, idx) => (
-                    <Card
-                      key={idx}
-                      variant="flat"
-                      style={{
-                        padding: 'var(--sp-4)',
-                        borderLeft: `4px solid ${p.status === 'CONFIRMED' ? 'var(--green)' : p.status === 'PENDING' ? 'var(--gold)' : 'var(--border-default)'}`,
-                        borderRadius: 0,
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--sp-3)' }}>
-                        <div style={{ fontWeight: '800', fontSize: '1rem', color: 'var(--tx-1)' }}>{p.name}</div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                          <span style={{ fontWeight: '800', color: 'var(--tx-1)' }}>{p.subtotal}ج</span>
-                          {!isSent && p.status !== 'CONFIRMED' && p.id && (
-                            <button
-                              onClick={() => handleApproveOrder(p.id)}
-                              title={`Approve ${p.name}`}
-                              style={{
-                                background: 'var(--green-dim)',
-                                color: 'var(--green)',
-                                border: 'none',
-                                width: '28px',
-                                height: '28px',
-                                borderRadius: '50%',
-                                cursor: 'pointer',
-                                fontSize: '14px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                              }}
-                            >
-                              ✓
-                            </button>
-                          )}
-                          {!isSent && (
-                            <button
-                              onClick={() => handleEvictUser(p.name)}
-                              title={`Remove ${p.name}`}
-                              style={{
-                                background: 'var(--red-dim)',
-                                color: 'var(--red)',
-                                border: 'none',
-                                width: '28px',
-                                height: '28px',
-                                borderRadius: '50%',
-                                cursor: 'pointer',
-                                fontSize: '14px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                              }}
-                            >
-                              ×
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                        {p.textOrder ? (
-                          <>
-                            <div style={{ fontSize: '0.9rem', color: 'var(--tx-1)', whiteSpace: 'pre-wrap', lineHeight: 1.4, background: 'var(--bg-base)', padding: '8px', borderRadius: 'var(--r-sm)' }}>
-                              {p.textOrder}
-                            </div>
-                            {!isSent && (
-                              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '8px' }}>
-                                <span style={{ fontSize: '0.75rem', color: 'var(--tx-3)', fontWeight: '700' }}>Price:</span>
-                                <input
-                                  type="number"
-                                  defaultValue={p.subtotal || 0}
-                                  onBlur={(e) => {
-                                    const val = parseFloat(e.target.value) || 0;
-                                    if (val !== p.subtotal) {
-                                      handleUpdatePayment(p.name, { subtotal: val });
-                                    }
-                                  }}
-                                  style={{
-                                    width: '80px',
-                                    padding: '4px 8px',
-                                    borderRadius: 'var(--r-sm)',
-                                    border: '1px solid var(--border-default)',
-                                    background: 'var(--bg-elevated)',
-                                    color: 'var(--tx-1)',
-                                    fontSize: '0.85rem'
-                                  }}
-                                />
-                                <span style={{ fontSize: '0.75rem', color: 'var(--tx-3)' }}>ج</span>
-                              </div>
-                            )}
-                          </>
-                        ) : (
-                          p.items.map((i, iIdx) => (
-                            <div
-                              key={iIdx}
-                              style={{
-                                fontSize: '0.825rem',
-                                color: i.option === 'إضافة' ? 'var(--green)' : 'var(--tx-2)',
-                                display: 'flex',
-                                justifyContent: 'space-between',
-                              }}
-                            >
-                              <span>
-                                {i.option === 'إضافة'
-                                  ? `+ ${i.name}`
-                                  : <span>• {i.name} <span style={{ color: SIZE_COLORS[i.size] || 'var(--tx-2)', fontWeight: 700 }}>({i.size})</span></span>}
-                              </span>
-                              <span>{i.price}ج</span>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                      {p.notes && (
-                        <div style={{ marginTop: '10px', fontSize: '0.775rem', color: 'var(--gold)', fontStyle: 'italic' }}>
-                          📝 {p.notes}
-                        </div>
-                      )}
-                    </Card>
-                  ))}
-                </div>
+                  {dashboardSession.personOrders.map((originalP, idx) => {
+                    const p = { ...originalP, ...(paymentOverrides[originalP.name] || {}) };
+                    return (
+        <Card
+          key={idx}
+          variant="flat"
+          style={{
+            padding: 'var(--sp-4)',
+            borderLeft: `4px solid ${p.status === 'CONFIRMED' ? 'var(--green)' : p.status === 'PENDING' ? 'var(--gold)' : 'var(--border-default)'}`,
+            borderRadius: 0,
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--sp-3)' }}>
+            <div style={{ fontWeight: '800', fontSize: '1rem', color: 'var(--tx-1)' }}>{p.name}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <span style={{ fontWeight: '800', color: 'var(--tx-1)' }}>{p.subtotal}ج</span>
+              {!isSent && p.status !== 'CONFIRMED' && p.id && (
+                <button
+                  onClick={() => handleApproveOrder(p.id)}
+                  title={`Approve ${p.name}`}
+                  style={{
+                    background: 'var(--green-dim)',
+                    color: 'var(--green)',
+                    border: 'none',
+                    width: '28px',
+                    height: '28px',
+                    borderRadius: '50%',
+                    cursor: 'pointer',
+                    fontSize: '14px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  ✓
+                </button>
               )}
+              {!isSent && (
+                <button
+                  onClick={() => handleEvictUser(p.name)}
+                  title={`Remove ${p.name}`}
+                  style={{
+                    background: 'var(--red-dim)',
+                    color: 'var(--red)',
+                    border: 'none',
+                    width: '28px',
+                    height: '28px',
+                    borderRadius: '50%',
+                    cursor: 'pointer',
+                    fontSize: '14px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '8px' }}>
+            <select
+              value={p.paymentMethod || ''}
+              onChange={(e) => handleUpdatePayment(p.name, { paymentMethod: e.target.value })}
+              style={{
+                fontSize: '0.75rem', padding: '4px 8px', borderRadius: 'var(--r-sm)',
+                border: '1px solid var(--border-default)', background: 'var(--bg-base)',
+                color: 'var(--tx-2)', fontFamily: 'var(--font-body)', cursor: 'pointer',
+              }}
+            >
+              <option value="">💳 Method...</option>
+              <option value="CASH">💵 Cash</option>
+              <option value="VODAFONE">📱 Vodafone</option>
+              <option value="INSTAPAY">💳 Instapay</option>
+            </select>
+            {p.paymentMethod === 'CASH' && (
+              <input
+                type="number"
+                defaultValue={p.amountReceived || 0}
+                onBlur={(e) => handleUpdatePayment(p.name, { amountReceived: parseFloat(e.target.value) || 0 })}
+                placeholder="Received"
+                style={{
+                  width: '60px', padding: '4px 6px', borderRadius: 'var(--r-sm)',
+                  border: '1px solid var(--border-default)', fontSize: '0.75rem',
+                  background: 'var(--bg-base)', color: 'var(--tx-1)',
+                }}
+              />
+            )}
+            <button
+              onClick={() => handleUpdatePayment(p.name, { isPaid: !p.isPaid })}
+              style={{
+                fontSize: '0.75rem', fontWeight: 800, padding: '5px 12px', borderRadius: 'var(--r-md)',
+                border: '2px solid',
+                borderColor: p.isPaid ? 'var(--green)' : 'var(--red)',
+                background: p.isPaid ? 'var(--green-dim)' : 'var(--red-dim)',
+                color: p.isPaid ? 'var(--green)' : 'var(--red)',
+                cursor: 'pointer',
+                fontFamily: 'var(--font-body)',
+                transition: 'all var(--dur-base)',
+                minWidth: '72px',
+              }}
+            >
+              {p.isPaid ? '✓ Paid' : '✗ Unpaid'}
+            </button>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            {p.textOrder ? (
+              <>
+                <div style={{ fontSize: '0.9rem', color: 'var(--tx-1)', whiteSpace: 'pre-wrap', lineHeight: 1.4, background: 'var(--bg-base)', padding: '8px', borderRadius: 'var(--r-sm)' }}>
+                  {p.textOrder}
+                </div>
+                {!isSent && (
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '8px' }}>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--tx-3)', fontWeight: '700' }}>Price:</span>
+                    <input
+                      type="number"
+                      defaultValue={p.subtotal || 0}
+                      onBlur={(e) => {
+                        const val = parseFloat(e.target.value) || 0;
+                        if (val !== p.subtotal) {
+                          handleUpdatePayment(p.name, { subtotal: val });
+                        }
+                      }}
+                      style={{
+                        width: '80px', padding: '4px 8px', borderRadius: 'var(--r-sm)',
+                        border: '1px solid var(--border-default)', background: 'var(--bg-elevated)',
+                        color: 'var(--tx-1)', fontSize: '0.85rem'
+                      }}
+                    />
+                    <span style={{ fontSize: '0.75rem', color: 'var(--tx-3)' }}>ج</span>
+                  </div>
+                )}
+              </>
+            ) : (
+              p.items.map((i, iIdx) => (
+                <div
+                  key={iIdx}
+                  style={{
+                    fontSize: '0.825rem',
+                    color: i.option === 'إضافة' ? 'var(--green)' : 'var(--tx-2)',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                  }}
+                >
+                  <span>
+                    {i.option === 'إضافة'
+                      ? `+ ${i.name}`
+                      : <span>• {i.name} <span style={{ color: SIZE_COLORS[i.size] || 'var(--tx-2)', fontWeight: 700 }}>({i.size})</span></span>}
+                  </span>
+                  <span>{i.price}ج</span>
+                </div>
+              ))
+            )}
+          </div>
+          {p.notes && (
+            <div style={{ marginTop: '10px', fontSize: '0.775rem', color: 'var(--gold)', fontStyle: 'italic' }}>
+              📝 {p.notes}
+            </div>
+          )}
+        </Card>
+      );
+    })}
+  </div>
+)}
             </div>
 
             {/* ── Activity feed ── */}
@@ -1090,134 +1206,254 @@ export default function AdminPortal({ user }) {
               )}
             </Card>
 
-            {/* ── Payment summary ── */}
-            {costSplit.length > 0 && (
-              <Card variant="raised" style={{ padding: 'var(--sp-5)' }}>
-                <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.25rem', marginBottom: 'var(--sp-4)', color: 'var(--tx-1)' }}>
-                  💸 Settlement
-                </h3>
-                {(() => {
-                  const totalOwed = costSplit.reduce((s, r) => s + r.grandTotal, 0);
-                  const totalPaid = costSplit.filter(r => r.isPaid).reduce((s, r) => s + r.grandTotal, 0);
-                  const paidPct = totalOwed > 0 ? (totalPaid / totalOwed) * 100 : 0;
-                  return (
-                    <div style={{ marginBottom: 16 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                        <span style={{ fontWeight: 700, color: 'var(--tx-1)' }}>{totalPaid.toFixed(0)}ج collected</span>
-                        <span style={{ color: 'var(--tx-3)', fontSize: '0.85rem' }}>of {totalOwed.toFixed(0)}ج</span>
-                      </div>
-                      <div style={{ height: 6, background: 'var(--bg-base)', borderRadius: 99, overflow: 'hidden' }}>
-                        <div style={{ width: `${paidPct}%`, height: '100%', background: 'var(--green)', transition: 'width 0.4s', borderRadius: 99 }} />
-                      </div>
-                    </div>
-                  );
-                })()}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
-                  {costSplit.map(row => (
-                    <div
-                      key={row.name}
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        paddingBottom: 'var(--sp-3)',
-                        borderBottom: '1px solid var(--border-subtle)',
-                        flexWrap: 'wrap',
-                        gap: '8px',
-                      }}
-                    >
-                      <div>
-                        <div style={{ fontWeight: '700', color: 'var(--tx-1)', fontSize: '0.95rem' }}>{row.name}</div>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--tx-3)', marginTop: '2px' }}>
-                          {row.itemsTotal}ج + {row.deliveryShare.toFixed(1)}ج delivery
-                          {(row.discountPercent > 0 || row.flatDiscount > 0) && (
-                            <>
-                              {row.discountPercent > 0 && ` • -${row.discountPercent}%`}
-                              {row.flatDiscount > 0 && ` • -${row.flatDiscount}ج`}
-                            </>
-                          )}
-                        </div>
-                        {(row.discountPercent > 0 || row.flatDiscount > 0) && (
-                          <div style={{ fontSize: '0.7rem', color: 'var(--green)', marginTop: '2px' }}>
-                            ⬇️ Discounted + Ceiled
-                          </div>
-                        )}
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', minWidth: '260px' }}>
-                        {/* Per-user discount controls */}
-                        <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end', alignItems: 'center', flexWrap: 'wrap' }}>
-                          <span style={{ fontSize: '0.7rem', color: 'var(--tx-3)', fontWeight: '700' }}>Disc:</span>
-                          <Button size="xs" variant={row.discountPercent === 0 ? 'secondary' : 'ghost'} onClick={() => handleUpdatePayment(row.name, { discountPercent: 0 })} style={{ padding: '2px 8px', fontSize: '0.7rem' }}>0%</Button>
-                          <Button size="xs" variant={row.discountPercent === 10 ? 'secondary' : 'ghost'} onClick={() => handleUpdatePayment(row.name, { discountPercent: 10 })} style={{ padding: '2px 8px', fontSize: '0.7rem' }}>10%</Button>
-                          <Button size="xs" variant={row.discountPercent === 20 ? 'secondary' : 'ghost'} onClick={() => handleUpdatePayment(row.name, { discountPercent: 20 })} style={{ padding: '2px 8px', fontSize: '0.7rem' }}>20%</Button>
-                          <input
-                            type="number"
-                            placeholder="Comp"
-                            value={row.flatDiscount || 0}
-                            onChange={(e) => handleUpdatePayment(row.name, { flatDiscountPerUser: parseFloat(e.target.value) || 0 })}
-                            style={{ width: '55px', padding: '2px 6px', borderRadius: 'var(--r-sm)', border: '1px solid var(--border-default)', fontSize: '0.75rem', background: 'var(--bg-elevated)', color: 'var(--tx-1)' }}
-                          />
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', justifyContent: 'flex-end' }}>
-                          <span style={{ fontWeight: '800', color: 'var(--gold)', fontSize: '1.1rem' }}>
-                            {row.grandTotal.toFixed(1)}ج
-                          </span>
-                          <button
-                            onClick={() => handleUpdatePayment(row.name, { isPaid: !row.isPaid })}
-                            style={{
-                              height: '36px',
-                              padding: '0 12px',
-                              borderRadius: 'var(--r-md)',
-                              border: '1px solid',
-                              borderColor: row.isPaid ? 'var(--green)' : 'var(--border-strong)',
-                              background: row.isPaid ? 'var(--green-dim)' : 'transparent',
-                              color: row.isPaid ? 'var(--green)' : 'var(--tx-3)',
-                              fontWeight: '700',
-                              fontSize: '0.85rem',
-                              cursor: 'pointer',
-                              fontFamily: 'var(--font-body)',
-                              transition: 'all var(--dur-base)',
-                            }}
-                          >
-                            {row.isPaid ? '✓ Paid' : 'Unpaid'}
-                          </button>
-                        </div>
-                        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-                          <select
-                            value={row.paymentMethod}
-                            onChange={(e) => handleUpdatePayment(row.name, { paymentMethod: e.target.value })}
-                            style={{ padding: '4px 8px', borderRadius: 'var(--r-sm)', border: '1px solid var(--border-default)', fontSize: '0.8rem', background: 'var(--bg-elevated)', color: 'var(--tx-2)' }}
-                          >
-                            <option value="">Method...</option>
-                            <option value="CASH">Cash</option>
-                            <option value="VODAFONE">Vodafone</option>
-                            <option value="INSTAPAY">Instapay</option>
-                          </select>
-                          {row.paymentMethod === 'CASH' && (
-                            <input
-                              type="number"
-                              defaultValue={row.amountReceived}
-                              onBlur={(e) => handleUpdatePayment(row.name, { amountReceived: parseFloat(e.target.value) || 0 })}
-                              placeholder="Received (ج)"
-                              style={{ width: '85px', padding: '4px 6px', borderRadius: 'var(--r-sm)', border: '1px solid var(--border-default)', fontSize: '0.8rem', background: 'var(--bg-elevated)', color: 'var(--tx-1)' }}
-                            />
-                          )}
-                        </div>
-                        {row.paymentMethod === 'CASH' && row.amountReceived > 0 && (
-                          <div style={{ fontSize: '0.75rem', textAlign: 'right', color: 'var(--tx-2)', marginTop: '2px' }}>
-                            Change owed: <span style={{ fontWeight: '800', color: row.amountReceived >= row.grandTotal ? 'var(--red)' : 'var(--tx-3)' }}>{(row.amountReceived - row.grandTotal).toFixed(1)}ج</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 'var(--sp-2)', fontWeight: '800', fontSize: '1.2rem' }}>
-                    <span style={{ color: 'var(--tx-1)' }}>Grand Total</span>
-                    <span style={{ color: 'var(--gold)' }}>{costSplit.reduce((sum, r) => sum + r.grandTotal, 0).toFixed(1)}ج</span>
+            {/* ── Cashier / Settlement Panel ── */}
+            {costSplit.length > 0 && (() => {
+              const totalOwed       = costSplit.reduce((s, r) => s + r.grandTotal, 0);
+              const paidRows        = costSplit.filter(r => r.isPaid);
+              const unpaidRows      = costSplit.filter(r => !r.isPaid);
+              const totalCollected  = paidRows.reduce((s, r) => s + r.grandTotal, 0);
+              const totalOutstanding = unpaidRows.reduce((s, r) => s + r.grandTotal, 0);
+              const paidPct         = totalOwed > 0 ? (totalCollected / totalOwed) * 100 : 0;
+              const allSettled      = costSplit.length > 0 && unpaidRows.length === 0;
+
+              const cashRows    = costSplit.filter(r => r.paymentMethod === 'CASH');
+              const digitalRows = costSplit.filter(r => r.paymentMethod === 'INSTAPAY' || r.paymentMethod === 'VODAFONE');
+              const totalCashReceived  = cashRows.reduce((s, r) => s + (r.amountReceived || 0), 0);
+              const totalDigital       = digitalRows.reduce((s, r) => s + r.grandTotal, 0);
+              const totalChangeBack    = cashRows.reduce((s, r) => {
+                const change = (r.amountReceived || 0) - r.grandTotal;
+                return change > 0 ? s + change : s;
+              }, 0);
+              const netCashInDrawer    = totalCashReceived - totalChangeBack;
+
+              return (
+                <Card variant="raised" style={{ padding: 'var(--sp-5)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)' }}>
+
+                  {/* ── Header ── */}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+                    <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.25rem', color: 'var(--tx-1)', margin: 0 }}>
+                      💸 Cashier Panel
+                    </h3>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--tx-3)', fontWeight: 700 }}>
+                      {paidRows.length}/{costSplit.length} paid
+                    </span>
                   </div>
-                </div>
-              </Card>
-            )}
+
+                  {/* ── All settled banner ── */}
+                  {allSettled && (
+                    <div style={{
+                      background: 'var(--green-dim)', border: '1px solid var(--green)',
+                      borderRadius: 'var(--r-md)', padding: '12px 16px',
+                      display: 'flex', alignItems: 'center', gap: 10,
+                      color: 'var(--green)', fontWeight: 800, fontSize: '1rem',
+                    }}>
+                      ✅ All settled! Everyone has paid.
+                    </div>
+                  )}
+
+                  {/* ── Top summary bar ── */}
+                  <div style={{
+                    display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))',
+                    gap: '10px',
+                  }}>
+                    {[
+                      { label: 'Total Order', value: `${totalOwed.toFixed(0)}ج`, color: 'var(--gold)' },
+                      { label: 'Collected', value: `${totalCollected.toFixed(0)}ج`, color: 'var(--green)' },
+                      { label: 'Outstanding', value: `${totalOutstanding.toFixed(0)}ج`, color: totalOutstanding > 0 ? 'var(--red)' : 'var(--tx-3)' },
+                      { label: 'Paid', value: `${paidRows.length}/${costSplit.length}`, color: 'var(--tx-1)' },
+                    ].map(stat => (
+                      <div key={stat.label} style={{
+                        background: 'var(--bg-base)', borderRadius: 'var(--r-md)',
+                        padding: '10px 12px', textAlign: 'center', border: '1px solid var(--border-subtle)',
+                      }}>
+                        <div style={{ fontSize: '1.1rem', fontWeight: 800, color: stat.color }}>{stat.value}</div>
+                        <div style={{ fontSize: '0.7rem', color: 'var(--tx-3)', fontWeight: 700, marginTop: 2 }}>{stat.label}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* ── Progress bar ── */}
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: '0.75rem', color: 'var(--tx-3)' }}>
+                      <span>{paidPct.toFixed(0)}% collected</span>
+                      <span>{totalCollected.toFixed(0)}ج of {totalOwed.toFixed(0)}ج</span>
+                    </div>
+                    <div style={{ height: 8, background: 'var(--bg-base)', borderRadius: 99, overflow: 'hidden' }}>
+                      <div style={{
+                        width: `${paidPct}%`, height: '100%', borderRadius: 99,
+                        background: allSettled ? 'var(--green)' : 'linear-gradient(90deg, var(--green), var(--gold))',
+                        transition: 'width 0.5s ease',
+                      }} />
+                    </div>
+                  </div>
+
+                  {/* ── Per-person rows ── */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {costSplit.map(row => {
+                      const hasMethod = !!row.paymentMethod;
+                      const borderColor = row.isPaid
+                        ? 'var(--green)'
+                        : hasMethod ? 'var(--gold)' : 'var(--red)';
+                      const change = row.paymentMethod === 'CASH' && row.amountReceived > 0
+                        ? (row.amountReceived || 0) - row.grandTotal : null;
+
+                      return (
+                        <div key={row.name} style={{
+                          background: 'var(--bg-elevated)',
+                          border: '1px solid var(--border-subtle)',
+                          borderLeft: `4px solid ${borderColor}`,
+                          borderRadius: 'var(--r-md)',
+                          padding: '12px 14px',
+                          display: 'flex', flexDirection: 'column', gap: 10,
+                        }}>
+                          {/* Row header */}
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                            <div>
+                              <div style={{ fontWeight: 800, color: 'var(--tx-1)', fontSize: '0.95rem' }}>{row.name}</div>
+                              <div style={{ fontSize: '0.72rem', color: 'var(--tx-3)', marginTop: 2 }}>
+                                {row.itemsTotal}ج items + {row.deliveryShare.toFixed(1)}ج delivery
+                                {row.discountPercent > 0 && ` • -${row.discountPercent}%`}
+                                {row.flatDiscount > 0 && ` • -${row.flatDiscount}ج`}
+                              </div>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                              <span style={{ fontWeight: 900, color: 'var(--gold)', fontSize: '1.15rem' }}>
+                                {row.grandTotal.toFixed(0)}ج
+                              </span>
+                              {/* Paid toggle */}
+                              <button
+                                onClick={() => handleUpdatePayment(row.name, { isPaid: !row.isPaid })}
+                                style={{
+                                  height: 34, padding: '0 14px',
+                                  borderRadius: 'var(--r-md)',
+                                  border: `2px solid ${row.isPaid ? 'var(--green)' : 'var(--border-strong)'}`,
+                                  background: row.isPaid ? 'var(--green-dim)' : 'transparent',
+                                  color: row.isPaid ? 'var(--green)' : 'var(--tx-3)',
+                                  fontWeight: 800, fontSize: '0.8rem',
+                                  cursor: 'pointer', fontFamily: 'var(--font-body)',
+                                  transition: 'all 0.15s', minWidth: 72,
+                                }}
+                              >
+                                {row.isPaid ? '✓ Paid' : '✗ Unpaid'}
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Discount controls */}
+                          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: '0.7rem', color: 'var(--tx-3)', fontWeight: 700 }}>Disc:</span>
+                            {[0, 10, 20].map(pct => (
+                              <button key={pct}
+                                onClick={() => handleUpdatePayment(row.name, { discountPercent: pct })}
+                                style={{
+                                  padding: '2px 9px', fontSize: '0.7rem', borderRadius: 'var(--r-sm)',
+                                  border: '1px solid',
+                                  borderColor: row.discountPercent === pct ? 'var(--gold)' : 'var(--border-default)',
+                                  background: row.discountPercent === pct ? 'rgba(255,200,50,0.15)' : 'var(--bg-base)',
+                                  color: row.discountPercent === pct ? 'var(--gold)' : 'var(--tx-3)',
+                                  cursor: 'pointer', fontFamily: 'var(--font-body)', fontWeight: 700,
+                                }}
+                              >{pct}%</button>
+                            ))}
+                            <input
+                              type="number" placeholder="Flat ج"
+                              value={row.flatDiscount || 0}
+                              onChange={e => handleUpdatePayment(row.name, { flatDiscountPerUser: parseFloat(e.target.value) || 0 })}
+                              style={{
+                                width: 60, padding: '2px 7px', borderRadius: 'var(--r-sm)',
+                                border: '1px solid var(--border-default)', fontSize: '0.75rem',
+                                background: 'var(--bg-base)', color: 'var(--tx-1)', fontFamily: 'var(--font-body)',
+                              }}
+                            />
+                          </div>
+
+                          {/* Payment method + cash input */}
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                            <select
+                              value={row.paymentMethod || ''}
+                              onChange={e => handleUpdatePayment(row.name, { paymentMethod: e.target.value })}
+                              style={{
+                                padding: '5px 10px', borderRadius: 'var(--r-sm)',
+                                border: '1px solid var(--border-default)',
+                                fontSize: '0.8rem', background: 'var(--bg-base)',
+                                color: 'var(--tx-2)', fontFamily: 'var(--font-body)', cursor: 'pointer',
+                              }}
+                            >
+                              <option value="">💳 Method…</option>
+                              <option value="CASH">💵 Cash</option>
+                              <option value="INSTAPAY">💳 Instapay</option>
+                              <option value="VODAFONE">📱 Vodafone</option>
+                            </select>
+
+                            {row.paymentMethod === 'CASH' && (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <input
+                                  type="number"
+                                  defaultValue={row.amountReceived || ''}
+                                  onBlur={e => handleUpdatePayment(row.name, { amountReceived: parseFloat(e.target.value) || 0 })}
+                                  placeholder="Received ج"
+                                  style={{
+                                    width: 90, padding: '5px 8px', borderRadius: 'var(--r-sm)',
+                                    border: '1px solid var(--border-default)', fontSize: '0.8rem',
+                                    background: 'var(--bg-base)', color: 'var(--tx-1)', fontFamily: 'var(--font-body)',
+                                  }}
+                                />
+                                {change !== null && (
+                                  <span style={{
+                                    fontSize: '0.78rem', fontWeight: 800,
+                                    color: change < 0 ? 'var(--red)' : 'var(--green)',
+                                    whiteSpace: 'nowrap',
+                                  }}>
+                                    {change < 0 ? `⚠ Short ${Math.abs(change).toFixed(0)}ج` : `Change: ${change.toFixed(0)}ج`}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* ── Cash drawer summary ── */}
+                  {cashRows.length > 0 && (
+                    <div style={{
+                      background: 'var(--bg-base)', borderRadius: 'var(--r-md)',
+                      border: '1px solid var(--border-subtle)', padding: '14px 16px',
+                    }}>
+                      <div style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
+                        🗄 Cash Drawer
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 10 }}>
+                        {[
+                          { label: 'Cash In', value: `${totalCashReceived.toFixed(0)}ج`, color: 'var(--green)' },
+                          { label: 'Digital', value: `${totalDigital.toFixed(0)}ج`, color: 'var(--tx-2)' },
+                          { label: 'Change Out', value: `-${totalChangeBack.toFixed(0)}ج`, color: totalChangeBack > 0 ? 'var(--red)' : 'var(--tx-3)' },
+                          { label: 'Net Cash', value: `${netCashInDrawer.toFixed(0)}ج`, color: 'var(--gold)' },
+                        ].map(s => (
+                          <div key={s.label} style={{ textAlign: 'center' }}>
+                            <div style={{ fontWeight: 800, fontSize: '1rem', color: s.color }}>{s.value}</div>
+                            <div style={{ fontSize: '0.68rem', color: 'var(--tx-3)', fontWeight: 700 }}>{s.label}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── Grand total footer ── */}
+                  <div style={{
+                    display: 'flex', justifyContent: 'space-between',
+                    paddingTop: 'var(--sp-2)', borderTop: '1px solid var(--border-subtle)',
+                    fontWeight: 800, fontSize: '1.15rem',
+                  }}>
+                    <span style={{ color: 'var(--tx-1)' }}>Grand Total</span>
+                    <span style={{ color: 'var(--gold)' }}>{totalOwed.toFixed(0)}ج</span>
+                  </div>
+
+                </Card>
+              );
+            })()}
+
           </>
         ) : (
           <div style={{ textAlign: 'center', padding: '80px var(--sp-4)', color: 'var(--tx-3)' }}>

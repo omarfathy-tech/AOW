@@ -213,6 +213,17 @@ public class AdminController {
         return ResponseEntity.ok(saved);
     }
 
+    @PatchMapping("/sessions/{id}/deadline")
+    public ResponseEntity<OrderSession> setDeadline(@PathVariable String id, @RequestBody Map<String, Object> request) {
+        OrderSession session = sessionRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Session not found"));
+        Number minutes = (Number) request.get("deadlineMinutes");
+        if (minutes != null) {
+            session.setDeadline(LocalDateTime.now().plusMinutes(minutes.longValue()));
+        }
+        return ResponseEntity.ok(sessionRepository.save(session));
+    }
+
     @DeleteMapping("/sessions/{id}")
     public ResponseEntity<?> deleteSession(@PathVariable String id) {
         if (!sessionRepository.existsById(id)) {
